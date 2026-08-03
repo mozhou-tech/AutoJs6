@@ -22,7 +22,7 @@ public:
                                       float boxThresh, float unClipRatio);
 
 private:
-    Ort::Session *session;
+    Ort::Session *session = nullptr;
     Ort::Env ortEnv = Ort::Env(ORT_LOGGING_LEVEL_ERROR, "DbNet");
     Ort::SessionOptions sessionOptions = Ort::SessionOptions();
     int numThread = 0;

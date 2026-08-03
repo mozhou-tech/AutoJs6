@@ -31,7 +31,6 @@ import org.autojs.autojs.script.JavaScriptFileSource
 import org.autojs.autojs.util.FileUtils.TYPE.JAVASCRIPT
 import org.autojs.autojs.util.MD5Utils
 import org.autojs.autojs6.R
-import org.autojs.plugin.paddle.ocr.api.IOcrPlugin
 import pxb.android.StringItem
 import pxb.android.axml.AxmlWriter
 import zhao.arsceditor.ResDecoder.ARSCDecoder
@@ -1414,47 +1413,12 @@ open class ApkBuilder(apkInputStream: InputStream?, private val outApkFile: File
         PADDLE_OCR(
             label = "Paddle OCR",
             aliases = listOf("paddle", "paddleocr", "paddle-ocr", "paddle_ocr"),
-            libsToInclude = emptyList(),
-            assetDirsToInclude = emptyList(),
-            plugin = PluginLib(
-                action = "org.autojs.plugin.PADDLE_OCR",
-                onServiceConnected = { binder: IBinder ->
-                    IOcrPlugin.Stub.asInterface(binder).info.variant
-                },
-                variants = listOf(
-                    PluginLibVariant(
-                        variant = "v3",
-                        assetsToInclude = listOf(
-                            "assets/labels/ppocr_keys_v1.txt",
-                            "assets/models/ocr_v3_for_cpu/",
-                        ) to listOf(
-                            "assets/models/ocr_v3_for_cpu(slim)/",
-                        ),
-                        libsToInclude = listOf(
-                            "libc++_shared.so",
-                            "libpaddle_light_api_shared.so",
-                            "libNative.so",
-                            "libopencv_java4.so",
-                        ),
-                    ),
-                    PluginLibVariant(
-                        variant = "v5",
-                        assetsToInclude = listOf(
-                            "assets/labels/ppocr_keys_ocrv5.txt",
-                            "assets/models/pp-ocrv5-arm/",
-                            "assets/models/pp-ocrv5-arm-int8/",
-                            "assets/models/pp-ocrv5-arm-opencl/",
-                            "assets/models/pp-ocrv5-arm-opencl-int8/",
-                        ) to emptyList(),
-                        libsToInclude = listOf(
-                            "libc++_shared.so",
-                            "libpaddle_light_api_shared.so",
-                            "libNative.so",
-                            "libopencv_java4.so",
-                            "libopencl_probe.so",
-                        ),
-                    ),
-                ),
+            libsToInclude = listOf(
+                "libRapidOcr.so",
+                "libonnxruntime.so",
+            ),
+            assetDirsToInclude = listOf(
+                "assets/paddleocr",
             ),
         ),
 

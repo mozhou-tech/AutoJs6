@@ -261,10 +261,10 @@ class LibDeployer(
             readTimeout = 90_000
         }
         val fileSize = urlConn.contentLengthLong
+        var downloaded = 0L
         urlConn.getInputStream().use { input ->
             FileOutputStream(cacheFile).use { output ->
                 val buffer = ByteArray(8192)
-                var downloaded = 0L
                 var read: Int
                 if (shouldPrintProgress && fileSize <= 0) {
                     println("\rDownloading...")
@@ -283,6 +283,9 @@ class LibDeployer(
                 }
             }
         }
+        if (fileSize > 0 && downloaded != fileSize) {
+            throw IOException("Incomplete download: expected $fileSize bytes, received $downloaded bytes")
+        }
         val path = cacheFile.absolutePath
         if (fileSize > 0) {
             val formattedSize = formatFileSize(fileSize)
@@ -296,7 +299,7 @@ class LibDeployer(
 
     private fun extractCacheFile() {
         when (cacheFileExtensionName.lowercase()) {
-            "zip" -> handleZip()
+            "zip", "aar" -> handleZip()
             "7z" -> handleSevenZip()
             else -> throw GradleException("Unknown archive file type: $cacheFileExtensionName")
         }

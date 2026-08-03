@@ -20,7 +20,7 @@ public:
     std::vector<Angle> getAngles(std::vector<cv::Mat> &partImgs, bool doAngle, bool mostAngle);
 
 private:
-    Ort::Session *session;
+    Ort::Session *session = nullptr;
     Ort::Env ortEnv = Ort::Env(ORT_LOGGING_LEVEL_ERROR, "AngleNet");
     Ort::SessionOptions sessionOptions = Ort::SessionOptions();
     int numThread = 0;

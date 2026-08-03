@@ -18,9 +18,11 @@ void OcrLite::init(JNIEnv *jniEnv, jobject assetManager, int numThread, std::str
     dbNet.setNumThread(numThread);
     dbNet.initModel(mgr, detName);
 
-    Logger("--- Init AngleNet ---\n");
-    angleNet.setNumThread(numThread);
-    angleNet.initModel(mgr, clsName);
+    if (!clsName.empty()) {
+        Logger("--- Init AngleNet ---\n");
+        angleNet.setNumThread(numThread);
+        angleNet.initModel(mgr, clsName);
+    }
 
     Logger("--- Init CrnnNet ---\n");
     crnnNet.setNumThread(numThread);

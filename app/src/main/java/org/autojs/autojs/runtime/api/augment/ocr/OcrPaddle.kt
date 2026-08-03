@@ -3,6 +3,7 @@ package org.autojs.autojs.runtime.api.augment.ocr
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import kotlinx.coroutines.runBlocking
 import org.autojs.autojs.AbstractAutoJs.Companion.isInrt
 import org.autojs.autojs.annotation.RhinoRuntimeFunctionInterface
@@ -16,12 +17,10 @@ import org.autojs.autojs.runtime.api.OcrResult
 import org.autojs.autojs.runtime.api.augment.Augmentable
 import org.autojs.autojs.runtime.api.augment.Invokable
 import org.autojs.autojs.runtime.api.augment.ocr.Ocr.Companion.OcrMode
-import org.autojs.autojs.runtime.exception.WrappedIllegalArgumentException
 import org.autojs.autojs.util.RhinoUtils.coerceBoolean
 import org.autojs.autojs.util.RhinoUtils.coerceFloatNumber
 import org.autojs.autojs.util.RhinoUtils.coerceIntNumber
 import org.autojs.autojs.util.RhinoUtils.coerceString
-import org.autojs.autojs6.R
 import org.autojs.plugin.paddle.ocr.api.OcrOptions
 import org.mozilla.javascript.NativeArray
 import org.mozilla.javascript.NativeObject
@@ -54,6 +53,7 @@ class OcrPaddle(private val scriptRuntime: ScriptRuntime) : Augmentable(scriptRu
         private const val DEFAULT_MERGE_LINE = false
 
         private const val EXTRA_RAW_IMAGE = "rawImage"
+        private const val TAG = "OcrPaddle"
 
         @JvmStatic
         @RhinoRuntimeFunctionInterface
@@ -79,15 +79,16 @@ class OcrPaddle(private val scriptRuntime: ScriptRuntime) : Augmentable(scriptRu
                 this.scoreThreshold = parsed.scoreThreshold
                 this.extras = parsed.extras
             }
-            return if (!isInrt) {
-                runBlocking(scriptRuntime.coroutineContext) {
-                    val target = PaddleOcrPluginHost.select(globalContext)
-                        ?: throw WrappedIllegalArgumentException(globalContext.getString(R.string.error_no_paddle_ocr_plugins_available))
-                    PaddleOcrPluginHost.recognizeText(globalContext, target, image.bitmap, ocrOptions)
+            return runBlocking(scriptRuntime.coroutineContext) {
+                if (!isInrt) {
+                    PaddleOcrPluginHost.select(globalContext)?.let { target ->
+                        runCatching {
+                            PaddleOcrPluginHost.recognizeText(globalContext, target, image.bitmap, ocrOptions)
+                        }.onFailure {
+                            Log.w(TAG, "External Paddle OCR failed; using embedded PP-OCRv6", it)
+                        }.getOrNull()?.let { return@runBlocking it }
+                    }
                 }
-            } else {
-                // Use embedded engine in packaged (INRT) app.
-                // zh-CN: 打包应用 (INRT) 使用内置引擎 (本地推理), 不依赖插件.
                 PaddleOcrEmbeddedEngine.recognizeText(globalContext, image.bitmap, ocrOptions)
             }
         }
@@ -104,15 +105,20 @@ class OcrPaddle(private val scriptRuntime: ScriptRuntime) : Augmentable(scriptRu
                 this.scoreThreshold = parsed.scoreThreshold
                 this.extras = parsed.extras
             }
-            val results = if (!isInrt) {
-                runBlocking(scriptRuntime.coroutineContext) {
-                    val target = PaddleOcrPluginHost.select(globalContext)
-                        ?: throw WrappedIllegalArgumentException(globalContext.getString(R.string.error_no_paddle_ocr_plugins_available))
-                    PaddleOcrPluginHost.detect(globalContext, target, image.bitmap, ocrOptions)
-                }.map { OcrResult(it.text, it.confidence, it.bounds) }
-            } else {
-                // Use embedded engine in packaged (INRT) app.
-                // zh-CN: 打包应用 (INRT) 使用内置引擎 (本地推理), 不依赖插件.
+            val results = runBlocking(scriptRuntime.coroutineContext) {
+                if (!isInrt) {
+                    PaddleOcrPluginHost.select(globalContext)?.let { target ->
+                        runCatching {
+                            PaddleOcrPluginHost.detect(globalContext, target, image.bitmap, ocrOptions)
+                        }.onFailure {
+                            Log.w(TAG, "External Paddle OCR failed; using embedded PP-OCRv6", it)
+                        }.getOrNull()?.let { pluginResults ->
+                            return@runBlocking pluginResults.map {
+                                OcrResult(it.text, it.confidence, it.bounds)
+                            }
+                        }
+                    }
+                }
                 PaddleOcrEmbeddedEngine.detect(globalContext, image.bitmap, ocrOptions).map {
                     OcrResult(it.text, it.confidence, it.bounds)
                 }

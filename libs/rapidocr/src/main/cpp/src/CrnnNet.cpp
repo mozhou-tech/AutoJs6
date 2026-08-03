@@ -101,10 +101,7 @@ TextLine CrnnNet::scoreToTextLine(const std::vector<float> &outputData, int h, i
 
     for (int i = 0; i < h; i++) {
         int start = i * w;
-        int stop = (i + 1) * w;
-        if (stop > dataSize - 1) {
-            stop = (i + 1) * w - 1;
-        }
+        int stop = (std::min)(int((i + 1) * w), int(dataSize));
         maxIndex = int(argmax(&outputData[start], &outputData[stop]));
         maxValue = float(*std::max_element(&outputData[start], &outputData[stop]));
 
@@ -119,15 +116,22 @@ TextLine CrnnNet::scoreToTextLine(const std::vector<float> &outputData, int h, i
 
 TextLine CrnnNet::getTextLine(cv::Mat &src) {
     float scale = (float) dstHeight / (float) src.rows;
-    int dstWidth = int((float) src.cols * scale);
+    int resizedWidth = (std::max)(1, int(std::ceil((float) src.cols * scale)));
+    int dstWidth = (std::min)((std::max)(baseWidth, resizedWidth), maxWidth);
+    resizedWidth = (std::min)(resizedWidth, dstWidth);
 
     cv::Mat srcResize;
-    resize(src, srcResize, cv::Size(dstWidth, dstHeight));
+    resize(src, srcResize, cv::Size(resizedWidth, dstHeight));
 
-    std::vector<float> inputTensorValues = substractMeanNormalize(srcResize, meanValues,
+    // RapidOCR 3.9.2 and PaddleOCR pad recognition inputs on the right after
+    // normalization. A mid-gray BGR canvas normalizes to approximately zero.
+    cv::Mat srcFit(dstHeight, dstWidth, CV_8UC3, cv::Scalar(127.5, 127.5, 127.5));
+    srcResize.copyTo(srcFit(cv::Rect(0, 0, resizedWidth, dstHeight)));
+
+    std::vector<float> inputTensorValues = substractMeanNormalize(srcFit, meanValues,
                                                                   normValues);
 
-    std::array<int64_t, 4> inputShape{1, srcResize.channels(), srcResize.rows, srcResize.cols};
+    std::array<int64_t, 4> inputShape{1, srcFit.channels(), srcFit.rows, srcFit.cols};
 
     auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
 

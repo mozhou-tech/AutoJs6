@@ -18,7 +18,7 @@ ext {
 }
 
 val versionMap = mapOf(
-    "OFFICIAL_NAME" to "1.3.0", /* From original build.gradle file. */
+    "OFFICIAL_NAME" to "3.9.2",
     "MIN_SDK" to props["MIN_SDK"].toInt(),
     "COMPILE_SDK" to props["COMPILE_SDK"].toInt(),
     "TARGET_SDK" to props["TARGET_SDK"].toInt(),
@@ -60,10 +60,10 @@ val libsToDeploy = listOf(
     utils.newLibDeployer(
         project,
         nameMap["ONNX_RUNTIME"] as String,
-        "https://github.com/RapidAI/OnnxruntimeBuilder/releases/download/${versionMap["ONNX_RUNTIME"]}/onnxruntime-${versionMap["ONNX_RUNTIME"]}-android-shared.7z",
+        "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${versionMap["ONNX_RUNTIME"]}/onnxruntime-android-${versionMap["ONNX_RUNTIME"]}.aar",
     ).apply {
-        setSourceDir("/onnxruntime-shared/")
-        setDestDir("/src/main/onnxruntime-shared/")
+        setSourceDir("/jni/")
+        setDestDir("/src/main/onnxruntime-android/")
     },
 )
 

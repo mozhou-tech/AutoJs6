@@ -8,6 +8,7 @@
 /src/sdk/native/
 /src/main/onnx/
 /src/main/onnxruntime-shared/
+/src/main/onnxruntime-android/
 
 *.skip
 **/temp-extracted/

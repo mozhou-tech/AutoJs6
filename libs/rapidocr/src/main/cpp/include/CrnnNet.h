@@ -22,7 +22,7 @@ public:
     std::vector<TextLine> getTextLines(std::vector<cv::Mat> &partImg);
 
 private:
-    Ort::Session *session;
+    Ort::Session *session = nullptr;
     Ort::Env ortEnv = Ort::Env(ORT_LOGGING_LEVEL_ERROR, "CrnnNet");
     Ort::SessionOptions sessionOptions = Ort::SessionOptions();
     int numThread = 0;
@@ -33,6 +33,8 @@ private:
     const float meanValues[3] = {127.5, 127.5, 127.5};
     const float normValues[3] = {1.0 / 127.5, 1.0 / 127.5, 1.0 / 127.5};
     const int dstHeight = 48;
+    const int baseWidth = 320;
+    const int maxWidth = 3200;
 
     std::vector<std::string> keys;
 

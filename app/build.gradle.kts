@@ -260,8 +260,6 @@ dependencies /* Unclassified */ {
     // Plugin API: Paddle OCR API
     implementation(project(":plugin-api:paddle-ocr-api"))
 
-    // Plugin API: Paddle OCR Engine
-    implementation(project(":plugin-api:paddle-ocr-engine"))
 }
 
 dependencies /* MIME */ {

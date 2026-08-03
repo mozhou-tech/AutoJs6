@@ -1,82 +1,71 @@
 package org.autojs.autojs.runtime.api.augment.ocr
 
 import android.content.Context
-import android.content.res.AssetManager
 import android.graphics.Bitmap
-import com.baidu.paddle.lite.ocr.PaddleOcrEngine
-import com.baidu.paddle.lite.ocr.VariantSpec
-import org.autojs.autojs6.R
+import android.graphics.Rect
+import com.benjaminwan.ocrlibrary.PaddleOcrV6Engine
+import com.benjaminwan.ocrlibrary.TextBlock
 import org.autojs.plugin.paddle.ocr.api.OcrOptions
-import org.autojs.plugin.paddle.ocr.api.OcrResult
 
+/** In-process PP-OCRv6 tiny implementation backed by ONNX Runtime Android. */
 internal object PaddleOcrEmbeddedEngine {
 
     @Volatile
-    private var engine: PaddleOcrEngine? = null
+    private var engine: PaddleOcrV6Engine? = null
 
-    @Volatile
-    private var resolvedVariant: VariantSpec? = null
-
-    private fun getEngine(context: Context): PaddleOcrEngine {
-        // Lazily initialize embedded engine.
-        // zh-CN: 懒初始化内置引擎.
-        val cached = engine
-        if (cached != null) return cached
+    private fun getEngine(context: Context, options: OcrOptions): PaddleOcrV6Engine {
+        engine?.let { return it }
         return synchronized(this) {
-            engine ?: run {
-                val appCtx = context.applicationContext
-                val variant = resolveVariantOrThrow(appCtx, appCtx.assets).also { resolvedVariant = it }
-                PaddleOcrEngine(
-                    appContext = appCtx,
-                    variant = variant,
-                ).also { engine = it }
-            }
+            engine ?: PaddleOcrV6Engine(
+                context.applicationContext,
+                options.cpuThreadNum.coerceAtLeast(1),
+            ).also { engine = it }
         }
     }
 
-    private fun resolveVariantOrThrow(context: Context, assets: AssetManager): VariantSpec {
-        // Mirror the packaging-time selection rule:
-        // - If neither exists -> throw.
-        // - If both exist -> v5 first.
-        // - If only one exists -> choose it.
-        // zh-CN:
-        // 复刻打包阶段的选择规则:
-        // - 两者都不存在 -> 抛异常.
-        // - 两者都存在 -> v5 优先.
-        // - 仅存在一个 -> 选择唯一项.
-        val hasV5 = assets.hasAsset("labels/ppocr_keys_ocrv5.txt") &&
-                assets.hasAsset("models/pp-ocrv5-arm/PP-OCRv5_mobile_det.nb")
+    fun recognizeText(context: Context, bitmap: Bitmap, options: OcrOptions): List<String> =
+        detect(context, bitmap, options).map { it.text }
 
-        val hasV3 = assets.hasAsset("labels/ppocr_keys_v1.txt") &&
-                assets.hasAsset("models/ocr_v3_for_cpu/det_opt.nb")
-
-        return when {
-            hasV5 -> VariantSpec.v5()
-            hasV3 -> VariantSpec.v3()
-            else -> throw IllegalStateException(
-                context.getString(R.string.error_no_embedded_paddle_ocr_assets_found)
-            )
-        }
-    }
-
-    private fun AssetManager.hasAsset(path: String): Boolean {
+    fun detect(context: Context, bitmap: Bitmap, options: OcrOptions): List<EmbeddedOcrResult> {
+        require(!bitmap.isRecycled) { "Cannot run OCR on a recycled bitmap" }
+        val output = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         return try {
-            open(path).use { true }
-        } catch (_: Throwable) {
-            false
+            val result = getEngine(context, options).detect(
+                input = bitmap,
+                output = output,
+                maxSideLen = options.detLongSize.takeIf { it > 0 }
+                    ?: PaddleOcrV6Engine.DEFAULT_DET_SIDE_LEN,
+            )
+            val threshold = options.scoreThreshold.takeIf { it >= 0f } ?: 0f
+            result.textBlocks.asSequence()
+                .map(::toEmbeddedResult)
+                .filter { it.text.isNotBlank() && it.confidence >= threshold }
+                .toList()
+        } finally {
+            output.recycle()
         }
     }
 
-    fun recognizeText(context: Context, bitmap: Bitmap, options: OcrOptions): List<String> {
-        // Run OCR with embedded engine.
-        // zh-CN: 使用内置引擎执行 OCR.
-        return getEngine(context).recognizeText(bitmap, options)
+    private fun toEmbeddedResult(block: TextBlock): EmbeddedOcrResult {
+        val left = block.boxPoint.minOfOrNull { it.x } ?: 0
+        val top = block.boxPoint.minOfOrNull { it.y } ?: 0
+        val right = block.boxPoint.maxOfOrNull { it.x } ?: left
+        val bottom = block.boxPoint.maxOfOrNull { it.y } ?: top
+        val confidence = block.charScores
+            .takeIf { it.isNotEmpty() }
+            ?.average()
+            ?.toFloat()
+            ?: block.boxScore
+        return EmbeddedOcrResult(
+            text = block.text,
+            confidence = confidence,
+            bounds = Rect(left, top, right, bottom),
+        )
     }
 
-    fun detect(context: Context, bitmap: Bitmap, options: OcrOptions): List<OcrResult> {
-        // Run OCR detection with embedded engine.
-        // zh-CN: 使用内置引擎执行 OCR 检测.
-        return getEngine(context).detect(bitmap, options)
-    }
-
+    data class EmbeddedOcrResult(
+        val text: String,
+        val confidence: Float,
+        val bounds: Rect,
+    )
 }

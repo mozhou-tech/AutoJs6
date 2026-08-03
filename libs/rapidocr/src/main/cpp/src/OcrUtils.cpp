@@ -12,11 +12,11 @@ ScaleParam getScaleParam(cv::Mat &src, const float scale) {
     int dstWidth = int((float) srcWidth * scale);
     int dstHeight = int((float) srcHeight * scale);
     if (dstWidth % 32 != 0) {
-        dstWidth = (dstWidth / 32 - 1) * 32;
+        dstWidth = (dstWidth / 32) * 32;
         dstWidth = (std::max)(dstWidth, 32);
     }
     if (dstHeight % 32 != 0) {
-        dstHeight = (dstHeight / 32 - 1) * 32;
+        dstHeight = (dstHeight / 32) * 32;
         dstHeight = (std::max)(dstHeight, 32);
     }
     float scaleWidth = (float) dstWidth / (float) srcWidth;
@@ -40,11 +40,11 @@ ScaleParam getScaleParam(cv::Mat &src, const int targetSize) {
         dstWidth = int((float) dstWidth * scale);
     }
     if (dstWidth % 32 != 0) {
-        dstWidth = (dstWidth / 32 - 1) * 32;
+        dstWidth = (dstWidth / 32) * 32;
         dstWidth = (std::max)(dstWidth, 32);
     }
     if (dstHeight % 32 != 0) {
-        dstHeight = (dstHeight / 32 - 1) * 32;
+        dstHeight = (dstHeight / 32) * 32;
         dstHeight = (std::max)(dstHeight, 32);
     }
     float scaleWidth = (float) dstWidth / (float) srcWidth;

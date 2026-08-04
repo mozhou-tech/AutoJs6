@@ -24,8 +24,9 @@ Headscale 网络中的独立节点，但不接管整台手机的网络流量。�
 前台服务、开机恢复和应用内设置入口；Go 桥接层基于 `tailscale.com v1.102.0` 与
 `gomobile` 生成 `phone-tailnet.aar`，覆盖 arm64-v8a 和 armeabi-v7a；为控制内置产物体积，
 不包含 x86 和 x86_64 模拟器 ABI。
-设置入口位于“设置 → 手机 MCP 服务”，用户可配置 Headscale HTTPS Server、一次性
-预授权密钥、节点名、Tailnet 端口和本地调试端口。
+首页第二个标签页为“MCP”，直接展示手机 MCP 服务设置；“设置 → 手机 MCP 服务”仍保留
+为辅助入口。用户可配置 Headscale HTTPS Server、一次性预授权密钥、节点名、Tailnet
+端口和本地调试端口。
 
 当前传输实现支持 MCP `2025-11-25` 与 `2025-06-18` 的 JSON-RPC 请求/响应子集，采用
 无状态 HTTP POST；第一版不启用 SSE。Go 层直接终止 HTTP、执行请求限制与应用层鉴权，

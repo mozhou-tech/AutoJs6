@@ -1023,6 +1023,7 @@
     <string name="text_do_not_show_again">Do not show again</string>
     <string name="text_documentation">Documents</string>
     <string name="text_documentation_source">Documentation source</string>
+    <string name="text_mcp" translatable="false">MCP</string>
     <string name="text_done">Done</string>
     <string name="text_download">Download</string>
     <string name="text_download_and_install_autojs6_including_above_abi">Download and install the version of AutoJs6 that includes the above ABI (the file name contains \"%s\")</string>

@@ -30,6 +30,7 @@ import org.autojs.autojs.event.BackPressedHandler
 import org.autojs.autojs.event.BackPressedHandler.DoublePressExit
 import org.autojs.autojs.event.BackPressedHandler.HostActivity
 import org.autojs.autojs.model.explorer.Explorers
+import org.autojs.autojs.mcp.PhoneMcpFragment
 import org.autojs.autojs.permission.AbleToUrge
 import org.autojs.autojs.permission.AllFilesAccessPermission
 import org.autojs.autojs.permission.DisplayOverOtherAppsPermission
@@ -41,7 +42,6 @@ import org.autojs.autojs.theme.ThemeColorManager.addViewBackground
 import org.autojs.autojs.theme.widget.ThemeColorFloatingActionButton
 import org.autojs.autojs.theme.widget.ThemeColorToolbar
 import org.autojs.autojs.ui.BaseActivity
-import org.autojs.autojs.ui.doc.DocumentationFragment
 import org.autojs.autojs.ui.explorer.ExplorerView
 import org.autojs.autojs.ui.floating.FloatyWindowManger
 import org.autojs.autojs.ui.log.LogActivity
@@ -273,7 +273,7 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
     private fun setUpTabViewPager(binding: ActivityMainBinding) {
         mPagerAdapter = FragmentPagerAdapterBuilder(this)
             .add(ExplorerFragment(), R.string.text_file)
-            .add(DocumentationFragment(), R.string.text_documentation)
+            .add(PhoneMcpFragment(), R.string.text_mcp)
             .add(PluginFragment(), R.string.text_plugins)
             .add(TaskManagerFragment(), R.string.text_task)
             .build()

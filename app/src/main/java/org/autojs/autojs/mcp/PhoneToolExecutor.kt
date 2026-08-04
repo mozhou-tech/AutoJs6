@@ -34,10 +34,16 @@ import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import org.autojs.autojs.AutoJs
 import org.autojs.autojs.core.accessibility.AccessibilityService
 import org.autojs.autojs.core.automator.GlobalActionAutomator
 import org.autojs.autojs.core.notification.NotificationListenerService
+import org.autojs.autojs.execution.ExecutionConfig
+import org.autojs.autojs.execution.ScriptExecution
+import org.autojs.autojs.execution.SimpleScriptExecutionListener
 import org.autojs.autojs.runtime.api.augment.ocr.PaddleOcrEmbeddedEngine
+import org.autojs.autojs.script.StringScriptSource
 import org.autojs.plugin.paddle.ocr.api.OcrOptions
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -47,6 +53,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 class PhoneToolExecutor(
@@ -79,6 +86,7 @@ class PhoneToolExecutor(
         "phone_global_action" -> write(args, peer) { execution(globalAction(args)) }
         "phone_input_text" -> write(args, peer) { execution(inputText(args)) }
         "phone_action_sequence" -> write(args, peer) { actionSequence(args, peer) }
+        "phone_call_js_api" -> write(args, peer) { execution(callJsApi(args)) }
         "phone_list_apps" -> execution(listApps(args))
         "phone_get_app_info" -> execution(getAppInfo(args))
         "phone_app_control" -> write(args, peer) { execution(appControl(args)) }
@@ -120,6 +128,7 @@ class PhoneToolExecutor(
             addProperty("screen_capture", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("ocr", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("visual_context", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            addProperty("js_api_bridge", true)
             addProperty("notification_access", NotificationListenerService.isNotificationListenerEnabled(context))
             addProperty("root", false)
             addProperty("shizuku", false)
@@ -511,6 +520,62 @@ class PhoneToolExecutor(
             addProperty("total", steps.size())
             add("steps", results)
         })
+    }
+
+    private fun callJsApi(args: JsonObject): JsonObject {
+        val api = args.string("api")
+        val arguments = args.getAsJsonArray("arguments") ?: JsonArray()
+        val resultMode = args.stringOrNull("result_mode") ?: "json"
+        val timeout = args.long("timeout_ms", 10_000).coerceIn(100, 30_000)
+        if (arguments.toString().toByteArray(StandardCharsets.UTF_8).size > 256 * 1024) {
+            throw PhoneToolException("INVALID_ARGUMENT", "JavaScript API arguments are limited to 256 KiB", false)
+        }
+        val source = StringScriptSource(
+            "MCP atomic API: $api",
+            PhoneJsApiBridge.buildScript(api, arguments, resultMode),
+        )
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<String?>()
+        val failure = AtomicReference<Throwable?>()
+        val startedAt = System.currentTimeMillis()
+        val scriptExecution: ScriptExecution = AutoJs.instance.scriptEngineService.execute(
+            source,
+            object : SimpleScriptExecutionListener() {
+                override fun onSuccess(execution: ScriptExecution, value: Any?) {
+                    result.set(value?.toString())
+                    latch.countDown()
+                }
+
+                override fun onException(execution: ScriptExecution, error: Throwable) {
+                    failure.set(error)
+                    latch.countDown()
+                }
+            },
+            ExecutionConfig(workingDirectory = context.filesDir.path),
+        )
+        if (!latch.await(timeout, TimeUnit.MILLISECONDS)) {
+            runCatching { scriptExecution.engine?.forceStop() }
+            throw PhoneToolException("TIMEOUT", "JavaScript API '$api' exceeded ${timeout}ms")
+        }
+        failure.get()?.let { error ->
+            throw PhoneToolException("ACTION_FAILED", "JavaScript API '$api' failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+        val payloadText = result.get()
+            ?: throw PhoneToolException("ACTION_FAILED", "JavaScript API '$api' returned no result envelope")
+        if (payloadText.toByteArray(StandardCharsets.UTF_8).size > 1024 * 1024) {
+            throw PhoneToolException("CAPABILITY_UNAVAILABLE", "JavaScript API result exceeds the 1 MiB MCP limit")
+        }
+        val payload = runCatching { JsonParser.parseString(payloadText).asJsonObject }.getOrElse {
+            throw PhoneToolException("ACTION_FAILED", "JavaScript API '$api' returned an invalid result envelope")
+        }
+        if (payload.get("ok")?.asBoolean != true) {
+            throw PhoneToolException("ACTION_FAILED", "JavaScript API '$api' failed: ${payload.get("error")?.asString ?: "unknown error"}")
+        }
+        return payload.apply {
+            remove("ok")
+            addProperty("api", api)
+            addProperty("duration_ms", System.currentTimeMillis() - startedAt)
+        }
     }
 
     private fun listApps(args: JsonObject): JsonObject {

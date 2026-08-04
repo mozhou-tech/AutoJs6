@@ -163,6 +163,22 @@ object PhoneToolSpecs {
                 required = arrayOf("lease_id", "steps"),
             ),
         ),
+        PhoneToolSpec(
+            "phone_call_js_api",
+            "Call any AutoJs6 atomic JavaScript API by dotted path with JSON arguments. Examples: getClip, setClip, home, press, device.vibrate.",
+            schema(
+                lease,
+                "api" to string("Global function or dotted namespace method"),
+                "arguments" to array(JsonObject(), "JSON-serializable positional arguments"),
+                "result_mode" to enum("json", "string", "discard"),
+                "timeout_ms" to integer("Maximum execution time", 100, 30000),
+                required = arrayOf("lease_id", "api"),
+            ),
+            readOnly = false,
+            destructive = true,
+            idempotent = false,
+            openWorld = true,
+        ),
         read(
             "phone_list_apps",
             "List installed launchable applications with pagination and filtering.",

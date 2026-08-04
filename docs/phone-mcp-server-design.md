@@ -20,7 +20,7 @@ Headscale 网络中的独立节点，但不接管整台手机的网络流量。�
 
 ### 1.1 当前实现状态（2026-08-03）
 
-第一版已经落地：Android 端提供 MCP JSON-RPC、30 个 `phone_` 工具、独占控制租约、
+第一版已经落地：Android 端提供 MCP JSON-RPC、31 个 `phone_` 工具、独占控制租约、
 前台服务、开机恢复和应用内设置入口；Go 桥接层基于 `tailscale.com v1.102.0` 与
 `gomobile` 生成 `phone-tailnet.aar`，覆盖 arm64-v8a 和 armeabi-v7a；为控制内置产物体积，
 不包含 x86 和 x86_64 模拟器 ABI。
@@ -665,6 +665,29 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 
 查询或取消安装、录屏、上传、下载、长脚本等异步任务。列表支持状态过滤和分页。
 
+#### `phone_call_js_api`
+
+通过一个通用 MCP 工具调用 AutoJs6 已注册的全局原子函数或命名空间方法。输入包含
+点分隔的 `api`、JSON 数组 `arguments`、`result_mode` 和 `timeout_ms`，例如：
+
+```json
+{"api":"getClip","arguments":[]}
+{"api":"setClip","arguments":["hello"]}
+{"api":"home","arguments":[]}
+{"api":"device.vibrate","arguments":[200]}
+```
+
+该工具只允许标识符组成的 API 路径，拒绝 `constructor`、`prototype`、`__proto__`
+和任何源码片段；参数由服务端作为 JSON 数据注入调用包装器，不允许任意 `eval`。所有
+调用均要求控制租约，参数上限 256 KiB、结果上限 1 MiB、超时上限 30 秒。由于一个
+通用入口可触达文件、网络、应用和系统副作用，其 annotations 采用最保守配置：
+`readOnly=false`、`destructive=true`、`idempotent=false`、`openWorld=true`。
+
+支持 JSON 参数和可序列化返回值的同步原子 API。要求函数回调、UI 对象、事件监听器或
+长生命周期资源的 API 不适合直接跨 JSON-RPC 传递，应使用专用 MCP 工具或异步 job。
+高风险 API 仍必须经过工具级策略、用户确认和审计，不能因为它来自合法 JS 命名空间
+而自动获得授权。
+
 #### `phone_run_script`
 
 运行受限 AutoJs6 脚本。默认只运行本地已签名、用户选择或显式批准的脚本。内联脚本
@@ -759,20 +782,21 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 14. `phone_global_action`
 15. `phone_input_text`
 16. `phone_action_sequence`
-17. `phone_list_apps`
-18. `phone_get_app_info`
-19. `phone_app_control`
-20. `phone_open_uri`
-21. `phone_get_notifications`
-22. `phone_notification_action`
-23. `phone_get_clipboard`
-24. `phone_set_clipboard`
-25. `phone_list_files`
-26. `phone_read_file`
-27. `phone_write_file`
-28. `phone_manage_file`
-29. `phone_get_jobs`
-30. `phone_cancel_job`
+17. `phone_call_js_api`
+18. `phone_list_apps`
+19. `phone_get_app_info`
+20. `phone_app_control`
+21. `phone_open_uri`
+22. `phone_get_notifications`
+23. `phone_notification_action`
+24. `phone_get_clipboard`
+25. `phone_set_clipboard`
+26. `phone_list_files`
+27. `phone_read_file`
+28. `phone_write_file`
+29. `phone_manage_file`
+30. `phone_get_jobs`
+31. `phone_cancel_job`
 
 第一版还包含内嵌 tsnet AAR、Headscale Server 本地配置、一次性 pre-auth key 注册、
 节点状态私有存储、Tailnet/回环 HTTP listener、应用层配对令牌及传输诊断界面。

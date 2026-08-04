@@ -24,7 +24,7 @@ class PhoneMcpProtocolTest {
     fun toolsListHasStableSchemasAndAnnotations() {
         val tools = protocol().request("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")
             .result().getAsJsonArray("tools")
-        assertEquals(30, tools.size())
+        assertEquals(31, tools.size())
         tools.forEach { element ->
             val tool = element.asJsonObject
             assertTrue(tool.get("name").asString.startsWith("phone_"))
@@ -37,6 +37,9 @@ class PhoneMcpProtocolTest {
         assertTrue(properties.has("max_nodes"))
         assertTrue(properties.has("min_confidence"))
         assertTrue(captureContext.getAsJsonObject("annotations").get("readOnlyHint").asBoolean)
+        val jsApi = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_call_js_api" }
+        assertTrue(jsApi.getAsJsonObject("annotations").get("destructiveHint").asBoolean)
+        assertTrue(jsApi.getAsJsonObject("annotations").get("openWorldHint").asBoolean)
     }
 
     @Test

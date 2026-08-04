@@ -80,9 +80,12 @@ Never commit `.env` files or print the token. If multiple devices are attached, 
 ```bash
 npm run list -- --json
 npm run smoke
+npm run verify
 ```
 
 `list` validates live discovery and Pi adaptation. Inspect names, descriptions, schemas, and execution modes. `smoke` calls only `phone_get_capabilities`, `phone_get_state`, and `phone_get_permissions`; it must not modify the device.
+
+`verify` additionally exercises parameterized read tools, server-side schema rejection, invalid-lease rejection, a short control lease, the side-effect-free `base64.encode` JavaScript bridge, and lease cleanup. Run it after changing a tool schema, executor dispatch, session control, or the JavaScript bridge.
 
 Test a parameterized read-only tool separately when its schema changes:
 
@@ -122,7 +125,20 @@ Use the generic bridge only to test bridge behavior or when no dedicated tool ex
 
 For a controlled write test, choose a reversible visible action such as a short toast or vibration only after the user authorizes device mutation. Never use file deletion, app force-stop, shell, message sending, purchases, account changes, or sensitive clipboard reads as smoke tests.
 
-## 5. Diagnose failures by layer
+## 5. Run an OpenAI-compatible Pi Agent smoke test
+
+After deterministic and live protocol tests pass, validate model tool selection separately:
+
+```bash
+export OPENAI_COMPAT_BASE_URL='https://provider.example/v1'
+export OPENAI_COMPAT_MODEL='model-id'
+export OPENAI_COMPAT_API_KEY='<API key>'
+npm run agent:smoke
+```
+
+The command exposes only four read-only tools and requires calls to `phone_get_capabilities` and `phone_get_permissions`. A pass proves endpoint compatibility, Pi streaming, tool-call generation, MCP execution, tool-result replay, and the final model response. It does not prove correctness of control tools; use `verify` for deterministic control-path coverage.
+
+## 6. Diagnose failures by layer
 
 | Symptom | Check |
 | --- | --- |
@@ -135,6 +151,6 @@ For a controlled write test, choose a reversible visible action such as a short 
 | Pi adapter unit failure | Compare raw MCP result and annotations with `src/pi-tools.ts`; keep protocol errors distinct from model behavior. |
 | Model chose the wrong tool | Confirm deterministic tests pass, then record the prompt, advertised tool definitions, tool-call trace, and result as a separate agent evaluation. |
 
-## 6. Record evidence
+## 7. Record evidence
 
 Report commands, build variant, emulator serial, server URL without credentials, tool catalog size, tools called, arguments with secrets removed, and pass/fail output. Do not record pairing tokens, clipboard contents, notification bodies, screenshots containing private data, or other credentials.

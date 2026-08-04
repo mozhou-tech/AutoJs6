@@ -762,11 +762,14 @@ class PhoneToolExecutor(
         val result = AtomicReference<String?>()
         val failure = AtomicReference<Throwable?>()
         val startedAt = System.currentTimeMillis()
+        val executionConfig = ExecutionConfig(workingDirectory = context.filesDir.path).apply {
+            setArgument(PhoneJsApiBridge.RESULT_SINK_ARGUMENT, result)
+        }
         val scriptExecution: ScriptExecution = AutoJs.instance.scriptEngineService.execute(
             source,
             object : SimpleScriptExecutionListener() {
                 override fun onSuccess(execution: ScriptExecution, value: Any?) {
-                    result.set(value?.toString())
+                    if (result.get() == null && value != null) result.compareAndSet(null, value.toString())
                     latch.countDown()
                 }
 
@@ -775,7 +778,7 @@ class PhoneToolExecutor(
                     latch.countDown()
                 }
             },
-            ExecutionConfig(workingDirectory = context.filesDir.path),
+            executionConfig,
         )
         if (!latch.await(timeout, TimeUnit.MILLISECONDS)) {
             runCatching { scriptExecution.engine?.forceStop() }

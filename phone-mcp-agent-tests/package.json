@@ -11,13 +11,16 @@
     "test:watch": "vitest",
     "list": "tsx src/cli.ts list",
     "call": "tsx src/cli.ts call",
-    "smoke": "tsx src/cli.ts smoke"
+    "smoke": "tsx src/cli.ts smoke",
+    "verify": "tsx src/cli.ts verify",
+    "agent:smoke": "tsx src/agent-smoke.ts"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
+    "@earendil-works/pi-ai": "0.83.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "typebox": "1.3.10",
     "zod": "3.25.76"

@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { PhoneMcpClient } from "./client.js";
+import { verifyLivePhone } from "./live-verify.js";
 import { createPhoneMcpAgentTools } from "./pi-tools.js";
 
 const READ_ONLY_SMOKE_TOOLS = [
@@ -45,6 +46,9 @@ async function main(): Promise<void> {
         break;
       case "smoke":
         await runSmoke(tools);
+        break;
+      case "verify":
+        await verifyLivePhone(definitions, client, console.log);
         break;
       default:
         throw new Error(`Unknown command '${command}'. Run with --help for usage.`);
@@ -122,6 +126,7 @@ Commands:
   list [--json]                         List MCP tools adapted as Pi Agent tools
   call --tool <name> [--args '<json>'] Call one tool through the Pi adapter
   smoke                                Run three safe read-only calls
+  verify                               Run extended read, rejection, lease and JS bridge checks
 `);
 }
 

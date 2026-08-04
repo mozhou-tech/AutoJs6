@@ -721,6 +721,12 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 高风险 API 仍必须经过工具级策略、用户确认和审计，不能因为它来自合法 JS 命名空间
 而自动获得授权。
 
+AutoJs6 的普通 JavaScript 由 `LoopBasedJavaScriptEngine` 执行，该引擎向脚本执行监听器
+返回 `null`，不能用 listener 的 `onSuccess` 参数承载 MCP 返回值。`phone_call_js_api`
+通过 `ExecutionConfig.execArgv` 注入进程内 `AtomicReference` 结果槽；调用包装器把成功或
+失败 envelope 序列化后主动写入结果槽，执行器再进行大小限制、JSON 解析和错误映射。
+结果槽不落盘、不进入日志，并且每次调用独立创建，避免并发调用互相覆盖。
+
 #### JS 原子能力盘点与发现
 
 `phone_list_js_apis` 提供经过核对、适合 JSON 参数和同步返回值的 JS 原子 API 目录，

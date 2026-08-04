@@ -46,6 +46,12 @@ npm run list
 npm run smoke
 ```
 
+运行扩展验证（只读工具、Schema 拒绝、租约拒绝、无副作用 JS Bridge 以及租约释放）：
+
+```bash
+npm run verify
+```
+
 调用指定工具（控制类工具仍须先获取 `phone_session_control` 租约）：
 
 ```bash
@@ -53,6 +59,21 @@ npm run call -- --tool phone_get_state --args '{}'
 ```
 
 可配置 `PHONE_MCP_TIMEOUT_MS` 调整默认的 30 秒请求超时。
+
+## OpenAI 兼容 Agent 测试
+
+测试框架支持通过任意 OpenAI Chat Completions 兼容端点验证 Pi Agent 的实际工具选择：
+
+```bash
+export OPENAI_COMPAT_BASE_URL='https://example.com/v1'
+export OPENAI_COMPAT_MODEL='model-id'
+export OPENAI_COMPAT_API_KEY='<API key>'
+npm run agent:smoke
+```
+
+该命令只向模型暴露 `phone_get_capabilities`、`phone_get_permissions`、
+`phone_get_state` 和 `phone_list_js_apis` 四个只读工具，并要求模型至少调用前两个工具。
+端点密钥和 PhoneMCP 配对令牌均只从环境变量读取。
 
 ## 在 Pi Agent 中使用
 
@@ -73,4 +94,5 @@ async function attachPhoneMcpTools(agent: Agent) {
 }
 ```
 
-测试框架不内置模型供应商或密钥；模型选择与认证由调用它的 Pi Agent 应用负责。
+测试框架不内置模型供应商、模型 ID 或密钥；模型选择与认证由环境变量或调用它的 Pi
+Agent 应用负责。

@@ -4,6 +4,8 @@ import com.google.gson.JsonArray
 
 internal object PhoneJsApiBridge {
 
+    const val RESULT_SINK_ARGUMENT = "__phoneMcpResultSink"
+
     private val segmentPattern = Regex("[A-Za-z_$][A-Za-z0-9_$]*")
     private val forbiddenSegments = setOf("__proto__", "prototype", "constructor")
 
@@ -16,6 +18,8 @@ internal object PhoneJsApiBridge {
         }
         return """
             (function () {
+                var resultSink = engines.myEngine().execArgv['$RESULT_SINK_ARGUMENT'];
+                var envelope;
                 try {
                     var segments = $encodedSegments;
                     var args = $arguments;
@@ -48,18 +52,19 @@ internal object PhoneJsApiBridge {
                             serialization = 'string';
                         }
                     }
-                    return JSON.stringify({
+                    envelope = {
                         ok: true,
                         result_type: resultType,
                         serialization: serialization,
                         result: value
-                    });
+                    };
                 } catch (error) {
-                    return JSON.stringify({
+                    envelope = {
                         ok: false,
                         error: String(error && error.message ? error.message : error)
-                    });
+                    };
                 }
+                resultSink.set(JSON.stringify(envelope));
             })();
         """.trimIndent()
     }

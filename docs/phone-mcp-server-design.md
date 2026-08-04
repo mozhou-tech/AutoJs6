@@ -20,7 +20,7 @@ Headscale 网络中的独立节点，但不接管整台手机的网络流量。�
 
 ### 1.1 当前实现状态（2026-08-04）
 
-第一版已经落地：Android 端提供 MCP JSON-RPC、36 个 `phone_` 工具、独占控制租约、
+第一版已经落地：Android 端提供 MCP JSON-RPC、38 个 `phone_` 工具、独占控制租约、
 前台服务、开机恢复和应用内设置入口；Go 桥接层基于 `tailscale.com v1.102.0` 与
 `gomobile` 生成 `phone-tailnet.aar`，覆盖 arm64-v8a 和 armeabi-v7a；为控制内置产物体积，
 不包含 x86 和 x86_64 模拟器 ABI。
@@ -34,6 +34,13 @@ Server、一次性预授权密钥、节点名、Tailnet 端口和本地调试端
 当前传输实现支持 MCP `2025-11-25` 与 `2025-06-18` 的 JSON-RPC 请求/响应子集，采用
 无状态 HTTP POST；第一版不启用 SSE。Go 层直接终止 HTTP、执行请求限制与应用层鉴权，
 再通过 gomobile `Handler` 回调 Kotlin MCP 协议层，没有额外的回环反向代理跳数。
+
+当前执行器已在统一工具入口记录工具名、成功/失败、稳定错误码和服务端耗时，并同步到
+应用日志与 Logcat；`phone_action_sequence` 的递归子工具调用也独立计时。当前还已落地
+近期调用的分位耗时聚合、序列子步骤共用参数校验、语义紧凑快照、祖先/后代关系选择、
+动作后置验证、受保护确认识别，以及基于 `PackageInstaller.Session` 的安装 Job。安装 Job
+在系统要求确认时进入 `waiting_user_action`，成功回调后再次通过 `PackageManager` 校验
+包名和版本。增量快照、Job 持久化、恢复令牌过期和卸载 Job 留在后续阶段。
 
 ## 2. 总体架构
 
@@ -272,6 +279,27 @@ Agent 按以下顺序理解页面：
 `phone_capture_screen` 和 `phone_capture_context` 还应直接返回 MCP `image` 内容。大文件和长日志返回资源 URI、
 游标或下载句柄，避免把大段 Base64 或无界文本放入模型上下文。
 
+`duration_ms` 使用服务端单调时钟统计，从参数校验完成、进入工具执行器开始，到结果或
+业务错误产生为止。组合工具除总耗时外，还必须返回每个子步骤的独立耗时。MCP
+`content.text` 只提供简短摘要，完整对象仅放在 `structuredContent`，不得把大型节点树、
+OCR 列表或 Base64 内容在两个字段中重复返回。
+
+动作工具必须区分“动作已分发”和“目标效果已验证”。无障碍服务或手势 API 返回成功只
+能设置 `dispatched=true`，不能直接推导业务状态已经改变。带后置条件的动作统一返回：
+
+```json
+{
+  "dispatched": true,
+  "effect_observed": false,
+  "status": "blocked",
+  "reason": "PROTECTED_CONFIRMATION",
+  "duration_ms": 226
+}
+```
+
+只有后置条件通过时才能返回 `effect_observed=true`。未提供后置条件时，响应必须明确
+标记 `verification.status="not_requested"`，避免 Agent 把 `performed=true` 解释成流程完成。
+
 ### 4.2 错误结果
 
 业务错误放在工具结果中，不升级为 MCP 传输错误：
@@ -281,14 +309,14 @@ Agent 按以下顺序理解页面：
   "ok": false,
   "request_id": "req_123",
   "error": {
-    "code": "ACCESSIBILITY_DISABLED",
-    "message": "无障碍服务尚未启用",
+    "code": "USER_ACTION_REQUIRED",
+    "message": "系统安装器需要用户确认",
     "recoverable": true,
-    "suggested_action": {
-      "tool": "phone_app_control",
-      "arguments": {
-        "action": "open_accessibility_settings"
-      }
+    "resume_token": "resume_123",
+    "required_action": {
+      "type": "manual_confirmation",
+      "label": "Install",
+      "foreground_package": "com.google.android.packageinstaller"
     }
   }
 }
@@ -298,6 +326,9 @@ Agent 按以下顺序理解页面：
 
 - `AUTHENTICATION_REQUIRED`
 - `USER_CONFIRMATION_REQUIRED`
+- `USER_ACTION_REQUIRED`
+- `PROTECTED_CONFIRMATION`
+- `SECURE_UI_NOT_AUTOMATABLE`
 - `PERMISSION_REQUIRED`
 - `CAPABILITY_UNAVAILABLE`
 - `ACCESSIBILITY_DISABLED`
@@ -314,10 +345,15 @@ Agent 按以下顺序理解页面：
 - `TIMEOUT`
 - `APP_NOT_INSTALLED`
 - `PRIVILEGE_REQUIRED`
+- `DEVICE_OWNER_REQUIRED`
+- `PRIVILEGED_INSTALLER_REQUIRED`
 - `POLICY_DENIED`
 - `INVALID_PRECONDITION`
 
 错误信息应给出可以执行的下一步，但不得暴露密钥、内部堆栈或其他客户端信息。
+当系统安全边界要求真实用户交互时，不得通过重复坐标点击、通用 JS 桥接或 Shell
+降级来伪装成功。服务端应返回 `required_action` 和短期 `resume_token`；用户完成操作后，
+Agent 使用该令牌恢复等待与结果验证，不重复已经完成的下载或导航步骤。
 
 ### 4.3 列表与长任务
 
@@ -326,6 +362,12 @@ Agent 按以下顺序理解页面：
 
 安装、录屏、长脚本等操作返回 `job_id`。Agent 通过 `phone_get_jobs` 查询，通过
 `phone_cancel_job` 取消，不维持无上限的 HTTP 请求。
+
+Job 使用统一状态机：`queued`、`running`、`waiting_user_action`、`succeeded`、`failed`
+和 `cancelled`。安装任务可以进一步报告 `downloading`、`verifying_package`、
+`installing` 等 `phase`。进入 `waiting_user_action` 时返回 `required_action`、
+`resume_token` 和可恢复期限；取消操作必须说明底层任务是否实际停止，以及临时文件是否
+已经清理。
 
 ## 5. 工具目录
 
@@ -356,10 +398,24 @@ Agent 按以下顺序理解页面：
     "root": false,
     "shizuku": false,
     "shell": "app",
-    "file_scope": "shared_storage"
+    "file_scope": "shared_storage",
+    "package_install": {
+      "request_install_packages": true,
+      "device_owner": false,
+      "profile_owner": false,
+      "privileged_installer": false,
+      "silent_install": false,
+      "requires_user_confirmation": true
+    },
+    "secure_ui_automation": false
   }
 }
 ```
+
+安装能力必须反映实际执行身份，而不是只检查 Manifest 声明。`silent_install=true` 仅在
+Device Owner、关联 Profile Owner 或持有系统特权安装权限且当前策略允许时返回。
+`secure_ui_automation=false` 表示系统确认、付款、凭据或其他受保护界面不能由普通
+无障碍动作可靠完成。
 
 MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 `idempotentHint=true`、`openWorldHint=false`。
@@ -419,7 +475,9 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 
 #### `phone_ui_snapshot`
 
-返回当前窗口和无障碍节点树。支持限制深度、仅返回可见节点，以及是否同时附带截图。
+返回当前窗口和无障碍节点树。支持 `max_depth`、`max_nodes`、`visible_only`、`region`、
+`fields` 和 `text_only`，以及是否同时附带截图。默认只返回可见且具有文字、描述、资源
+ID 或可操作状态的语义节点；调用方显式请求时才返回完整布局节点。
 每个节点至少包含：
 
 ```json
@@ -441,6 +499,11 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 
 节点 ID 只在对应 `snapshot_id` 内有效。
 
+大快照超过内联限制时返回资源句柄和摘要，不得截断 JSON 后仍声明为完整快照。支持基于
+`previous_snapshot_id` 返回增量变化，包括新增、删除和属性变化节点，减少连续页面观察
+的上下文开销。摘要文本只包含包名、窗口数、节点数、是否截断和资源句柄，不复制完整
+节点数组。
+
 #### `phone_ui_find`
 
 使用组合选择器查找节点，支持：
@@ -448,10 +511,24 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 - `text`、`resource_id`、`content_description`、`class_name`。
 - `clickable`、`scrollable`、`editable`、`enabled`、`visible`。
 - `bounds` 或父节点范围。
+- `within_node_id` 或稳定父范围。
+- `ancestor` / `descendant` 关系选择器。
+- `near_text` 与最大距离。
 - `match`: `exact`、`contains`、`regex`。
 - `limit` 和 `cursor`。
 
 默认返回所有候选的节点 ID、边界和最小上下文。多个匹配不能自动选取第一个执行。
+例如“闲鱼结果行中的下载按钮”应表示为：
+
+```json
+{
+  "ancestor": {"text": "闲鱼", "match": "exact"},
+  "descendant": {"text": "下载", "clickable": true}
+}
+```
+
+`nth` 只能在调用方显式指定并同时提供稳定父范围时使用，不允许将“第一个匹配”作为
+隐式默认值。
 
 #### `phone_ocr_read`
 
@@ -463,13 +540,18 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 在服务端等待以下条件，避免 Agent 高频轮询：
 
 - 节点出现或消失。
+- 节点文字或属性变化。
 - OCR 文字出现或消失。
-- 前台包名或 Activity 改变。
+- 前台包名、Activity 或窗口改变。
 - 屏幕区域发生变化或稳定一段时间。
 - 设备亮屏、解锁或网络恢复。
+- 应用安装、卸载或版本变化。
+- 下载完成、安装 Job 阶段变化或等待用户确认。
 
 参数包含 `condition`、`timeout_ms`、`stable_for_ms`。成功时返回满足条件的新状态或
-快照。
+快照，而不是只返回 `matched=true`。节点条件返回匹配节点和 `snapshot_id`；应用条件
+返回包信息；Job 条件返回最新任务状态。超时结果包含最后一次已脱敏观察值，帮助 Agent
+判断应该重试、恢复还是终止。
 
 #### `phone_compare_screen`
 
@@ -502,12 +584,27 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
     "snapshot_id": "snap_01892",
     "node_id": "node_17"
   },
-  "timeout_ms": 5000
+  "timeout_ms": 5000,
+  "expect": {
+    "package_name": "com.example.target",
+    "node_gone": {"text": "登录"},
+    "timeout_ms": 5000
+  }
 }
 ```
 
 也可以直接提供与 `phone_ui_find` 相同的选择器。如果匹配多个节点，返回
 `AMBIGUOUS_TARGET` 和候选列表，不执行动作。
+
+动作响应必须包含 `dispatched` 和 `verification`。`expect` 支持前台包名/Activity、节点
+出现或消失、节点属性、应用安装状态、屏幕变化比例和 Job 状态。安全窗口可能接受
+`dispatchGesture` 但拒绝目标操作；这种情况必须返回 `effect_observed=false`，不能仅凭
+底层 API 的布尔值返回成功。若 OCR 可见目标但无障碍树不可见，且前台窗口属于已知系统
+确认界面，返回 `PROTECTED_CONFIRMATION` 或 `SECURE_UI_NOT_AUTOMATABLE`。
+
+使用临时 `snapshot_id` 调用时保持严格过期检查。使用稳定关系选择器调用时，服务端可以
+在同一原子操作内重新采集、唯一匹配并执行，从而避免 Agent 往返期间快照过期；重新解析
+后出现多个候选仍必须拒绝执行。
 
 #### `phone_gesture`
 
@@ -535,8 +632,25 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 #### `phone_action_sequence`
 
 串行执行最多 50 个动作、等待和断言，默认 `stop_on_error=true`，总执行时间不超过
-两分钟。每一步返回序号、状态、耗时和必要的恢复信息。失败时返回最后已完成步骤以及
-最新屏幕/快照句柄。
+两分钟。每一步返回序号、工具名、状态、耗时、验证结果和必要的恢复信息。失败时返回
+最后已完成步骤以及最新屏幕/快照句柄。
+
+每个子步骤必须经过与顶层 `tools/call` 完全相同的工具存在性、JSON Schema、租约、
+能力、风险确认、超时和审计检查，禁止直接调用执行器绕过协议校验。序列可以引用前一步
+的非敏感结构化输出，并支持受限的 `wait`、`assert`、`retry` 和 `on_error`；重试必须有
+次数上限且不得用于绕过 `USER_ACTION_REQUIRED`、`PROTECTED_CONFIRMATION` 或策略拒绝。
+
+步骤结果示例：
+
+```json
+{
+  "index": 2,
+  "tool": "phone_ui_action",
+  "ok": true,
+  "duration_ms": 73.214,
+  "verification": {"status": "passed"}
+}
+```
 
 组合工具不能绕过其子操作的权限、确认和审计策略。
 
@@ -577,6 +691,28 @@ action、category、data 和 extras 必须分别校验；禁止接受拼接后�
 
 安装来源只能是已上传文件、受信任资源 URI 或允许域名的 HTTPS URL。安装前返回包名、
 签名、版本和权限变化供确认。卸载、降级、签名变化和覆盖安装按 L3 风险处理。
+
+`phone_install_app` 使用 `PackageInstaller.Session` 和异步 Job，不把系统安装确认界面当作
+普通 UI 自动化问题。执行策略按能力选择：
+
+1. Device Owner 或关联 Profile Owner：策略允许时执行免交互安装。
+2. 系统特权安装器：持有并被白名单授予 `INSTALL_PACKAGES` 时执行受审计安装。
+3. 普通应用：提交安装会话后进入 `waiting_user_action`，返回系统确认说明和
+   `resume_token`。
+4. 能力或来源不满足：在写入安装会话前返回明确错误，不降级为 Shell 或 ADB。
+
+`setRequireUserAction(USER_ACTION_NOT_REQUIRED)` 只是安装参数，不代表普通第三方应用获得
+静默安装能力；服务端必须依据实际 Device Owner、Profile Owner、安装者身份、更新所有权
+和系统权限判定。系统要求用户确认时，MCP 不提供关闭安全策略的通用开关。
+
+安装 Job 至少包含 `queued`、`downloading`、`verifying_package`、
+`waiting_user_action`、`installing`、`succeeded`、`failed` 和 `cancelled` 阶段。成功必须以
+PackageManager 查询到目标包和预期版本为准，不能以安装 Intent 已启动或按钮手势已分发
+为准。失败结果保留脱敏的 PackageInstaller 状态码、可恢复性和建议动作。
+
+通过应用商店驱动的流程与 `phone_install_app` 分开建模：前者仍是普通 UI 工作流，下载
+完成后若进入系统确认，必须转换为 `waiting_user_action`。不得宣称 PhoneMCP 可以绕过
+商店私有下载目录、签名校验或 Android 系统确认。
 
 #### `phone_manage_permission`
 
@@ -689,6 +825,24 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 查询 AutoJs6 日志和设备权限允许的系统日志。必须要求时间范围、级别、标签或包名中的
 至少一个过滤条件，并设置返回条数上限。日志中的令牌、密码和敏感输入需要脱敏。
 
+PhoneMCP 工具执行日志统一使用服务端单调时钟，至少记录工具名、成功/失败、稳定错误码
+和毫秒耗时，例如：
+
+```text
+[PhoneMCP] tool=phone_ui_action status=ok duration_ms=12.346
+[PhoneMCP] tool=phone_gesture status=error error_code=ACTION_FAILED duration_ms=3.500
+```
+
+不记录工具参数、输入文字、剪贴板、通知正文、文件内容、配对令牌或异常详情。日志写入
+失败不得改变工具执行结果。
+
+#### `phone_get_performance_metrics`
+
+返回指定时间窗口内按工具聚合的调用次数、成功率、超时次数、P50、P90、P95、P99 和
+最大耗时。该工具只读取脱敏聚合数据，不返回原始参数或用户内容；支持 `tool`、
+`window_ms` 和 `limit`。它用于区分设备执行、截图/OCR、语义查找与客户端往返耗时，
+不能替代逐请求审计记录。
+
 #### `phone_get_processes`
 
 返回系统允许查看的进程、前台状态、PID 和基础资源信息，不承诺普通 Android 应用
@@ -696,7 +850,13 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 
 #### `phone_get_jobs` / `phone_cancel_job`
 
-查询或取消安装、录屏、上传、下载、长脚本等异步任务。列表支持状态过滤和分页。
+查询或取消安装、录屏、上传、下载、长脚本等异步任务。列表支持状态、类型、创建者和
+时间范围过滤及分页。Job 返回 `state`、`phase`、进度、开始/更新时间、总耗时、稳定错误
+码、`required_action` 和可选 `resume_token`。
+
+取消是幂等操作：已结束 Job 返回当前终态；运行中 Job 请求底层取消并报告
+`cancellation_requested`；等待用户确认的安装 Job 应撤销可撤销的安装会话并清理受控临时
+文件。系统已接管且无法撤销时必须明确返回 `cancel_supported=false`，不能假装取消成功。
 
 #### `phone_call_js_api`
 
@@ -819,8 +979,9 @@ AutoJs6 的普通 JavaScript 由 `LoopBasedJavaScriptEngine` 执行，该引擎�
 
 ## 8. 审计和隐私
 
-记录以下字段：请求 ID、客户端 ID、工具名、风险等级、开始/结束时间、结果、用户确认
-状态和被修改资源的标识。默认不记录：
+记录以下字段：请求 ID、客户端 ID、工具名、风险等级、开始/结束时间、服务端耗时、
+结果、稳定错误码、动作验证状态、用户确认状态和被修改资源的标识。组合工具同时记录
+序列总耗时和每个子步骤耗时。默认不记录：
 
 - 密码和输入法敏感文本。
 - 配对令牌、Headscale 密钥和其他凭证。
@@ -860,16 +1021,24 @@ AutoJs6 的普通 JavaScript 由 `LoopBasedJavaScriptEngine` 执行，该引擎�
 24. `phone_get_app_info`
 25. `phone_app_control`
 26. `phone_open_uri`
-27. `phone_get_notifications`
-28. `phone_notification_action`
-29. `phone_get_clipboard`
-30. `phone_set_clipboard`
-31. `phone_list_files`
-32. `phone_read_file`
-33. `phone_write_file`
-34. `phone_manage_file`
-35. `phone_get_jobs`
-36. `phone_cancel_job`
+27. `phone_install_app`
+28. `phone_get_notifications`
+29. `phone_notification_action`
+30. `phone_get_clipboard`
+31. `phone_set_clipboard`
+32. `phone_list_files`
+33. `phone_read_file`
+34. `phone_write_file`
+35. `phone_manage_file`
+36. `phone_get_jobs`
+37. `phone_get_performance_metrics`
+38. `phone_cancel_job`
+
+第一版可靠性补强要求：所有动作结果区分 `dispatched` 与 `effect_observed`；
+`phone_action_sequence` 子步骤复用顶层校验和策略；大型快照不在 `content.text` 与
+`structuredContent` 重复；系统确认页面返回 `waiting_user_action` Job 或
+`PROTECTED_CONFIRMATION`，不得以底层手势 API 返回值冒充业务成功。这些属于现有工具
+契约修正，不以增加工具数量为前提。
 
 第一版还包含内嵌 tsnet AAR、Headscale Server 本地配置、一次性 pre-auth key 注册、
 节点状态私有存储、Tailnet/回环 HTTP listener、应用层配对令牌及传输诊断界面。
@@ -950,12 +1119,21 @@ Phone MCP 的 Midscene 适配器通过 `beforeInvokeAction` 和 `afterInvokeActi
 前置条件、后置条件、风险等级、所需权限和内容哈希。自动生成的 TypeScript/JSON DSL
 必须经过测试或人工确认后才能进入 `replay` 模式。
 
+编译器只固化已经通过后置验证的动作；底层仅返回 `dispatched=true`、目标效果未知或进入
+`PROTECTED_CONFIRMATION` 的步骤不得生成为无人值守动作，而应转换为带
+`required_action` 和恢复条件的人工检查点。回放时先解析稳定关系选择器，再执行动作和
+后置断言；只有解析或断言失败时，`adaptive` 模式才允许重新调用 VLM。
+
 ### 10.4 租约、安全与隐私
 
 语义流程开始时获取控制租约，长流程按期续租，结束或失败时释放。Midscene 的一次
 `aiAct` 可能包含多个真实动作，但不能因此获得整段流程的无限授权；Phone MCP 仍对每个
 底层动作执行权限、风险确认和审计。付款、授权、删除、发送消息、安装和敏感输入不能由
 录制器自动降级为无确认回放。
+
+人工确认检查点不会扩大租约或授权范围。用户完成系统确认后，流程通过短期
+`resume_token` 恢复，并重新验证前台包名、目标应用安装状态或其他后置条件；不得从受
+保护按钮之前盲目重复整个流程。
 
 VLM 模式会把截图发送给用户配置的模型提供商。适配器应支持敏感页面禁止上传、截图
 区域遮罩、模型提供商 allowlist 和本地模型策略；`replay` 模式不得因为生成报告而隐式
@@ -965,9 +1143,13 @@ VLM 模式会把截图发送给用户配置的模型提供商。适配器应支�
 
 ### 第二阶段
 
+- `phone_uninstall_app`、安装 Job 持久化、用户确认恢复令牌过期处理和更完整的
+  Device Owner/Profile Owner 安装策略。
+- 更丰富的动作后置条件、嵌套关系选择器、原子解析并操作，以及快照增量响应。
+- `phone_get_performance_metrics` 的时间窗口、持久化和跨重启趋势诊断。
 - 交互式 Headscale 认证 URL 和节点重新认证流程。
 - Tailnet连接质量、DERP和网络切换的增强诊断。
-- 应用安装卸载和权限管理。
+- 权限管理。
 - 上传下载、媒体查询和分享。
 - 系统设置、网络控制和屏幕比较。
 - 受限 `phone_run_script`。
@@ -998,6 +1180,16 @@ VLM 模式会把截图发送给用户配置的模型提供商。适配器应支�
 - Tailscale 依赖升级后的协议、Headscale兼容、APK体积、内存和电量回归。
 - 截图/OCR超时、权限被撤销、前台服务被系统回收。
 - 安装、删除、Shell、敏感输入和用户拒绝确认。
+- 系统安装器等受保护确认页中，手势已分发但目标状态未改变时必须判定验证失败，并返回
+  `PROTECTED_CONFIRMATION` 或 `USER_ACTION_REQUIRED`。
+- Device Owner、系统特权安装器和普通应用三种安装能力矩阵，以及安装 Job 从下载、校验、
+  等待确认到成功/失败/取消的状态转换。
+- `phone_action_sequence` 子步骤的 Schema、租约、风险确认和超时与顶层调用完全一致，
+  不能通过组合调用绕过校验。
+- 大型 UI 快照的紧凑摘要、资源句柄、字段投影和增量结果；测试不得在文本内容与
+  `structuredContent` 中重复完整节点树。
+- 成功、业务错误、异常和日志写入失败场景下的逐工具耗时；性能聚合验证 P50/P95 计算且
+  不包含敏感参数。
 - 路径穿越、命令注入、超大请求、重放、暴力配对和越权调用。
 - MCP Inspector 的 schema、structuredContent、annotations 和错误结果验证。
 - Midscene `explore` 生成稳定选择器、`replay` 全程零 VLM 调用和 `adaptive` 失败回退。

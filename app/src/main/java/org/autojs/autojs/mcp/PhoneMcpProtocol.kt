@@ -110,13 +110,13 @@ class PhoneMcpProtocol(private val executor: PhoneToolDispatcher) : Handler {
             throw PhoneToolException("INVALID_ARGUMENT", "tools/call arguments must be an object", false)
         }
         val args = arguments?.asJsonObject ?: JsonObject()
-        validateArguments(spec.inputSchema, args)
+        PhoneToolArgumentValidator.validate(spec.inputSchema, args)
         val execution = executor.execute(name, args, peer)
         return JsonObject().apply {
             add("content", JsonArray().apply {
                 add(JsonObject().apply {
                     addProperty("type", "text")
-                    addProperty("text", gson.toJson(execution.data))
+                    addProperty("text", execution.textSummary ?: gson.toJson(execution.data))
                 })
                 execution.additionalContent.forEach(::add)
             })
@@ -148,49 +148,6 @@ class PhoneMcpProtocol(private val executor: PhoneToolDispatcher) : Handler {
         val params = request.get("params") ?: return JsonObject()
         if (!params.isJsonObject) throw ProtocolInvalidParamsException("params must be an object")
         return params.asJsonObject
-    }
-
-    private fun validateArguments(schema: JsonObject, args: JsonObject) {
-        val properties = schema.getAsJsonObject("properties") ?: JsonObject()
-        val unknown = args.keySet().firstOrNull { !properties.has(it) }
-        if (unknown != null) {
-            throw PhoneToolException("INVALID_ARGUMENT", "Unknown argument: $unknown", false)
-        }
-        schema.getAsJsonArray("required")?.forEach { required ->
-            val name = required.asString
-            if (!args.has(name) || args.get(name).isJsonNull) {
-                throw PhoneToolException("INVALID_ARGUMENT", "Missing required argument: $name", false)
-            }
-        }
-        args.entrySet().forEach { (name, value) ->
-            if (value.isJsonNull) return@forEach
-            val field = properties.getAsJsonObject(name)
-            val expected = field.get("type")?.asString
-            val validType = when (expected) {
-                "string" -> value.isJsonPrimitive && value.asJsonPrimitive.isString
-                "boolean" -> value.isJsonPrimitive && value.asJsonPrimitive.isBoolean
-                "integer" -> value.isJsonPrimitive && value.asJsonPrimitive.isNumber && runCatching {
-                    value.asBigDecimal.stripTrailingZeros().scale() <= 0
-                }.getOrDefault(false)
-                "number" -> value.isJsonPrimitive && value.asJsonPrimitive.isNumber
-                "array" -> value.isJsonArray
-                "object" -> value.isJsonObject
-                else -> true
-            }
-            if (!validType) {
-                throw PhoneToolException("INVALID_ARGUMENT", "Argument '$name' must be $expected", false)
-            }
-            field.getAsJsonArray("enum")?.let { allowed ->
-                if (allowed.none { it == value }) {
-                    throw PhoneToolException("INVALID_ARGUMENT", "Argument '$name' must be one of ${allowed.joinToString { it.asString }}", false)
-                }
-            }
-            if (value.isJsonPrimitive && value.asJsonPrimitive.isNumber) {
-                val number = value.asDouble
-                field.get("minimum")?.asDouble?.let { if (number < it) throw PhoneToolException("INVALID_ARGUMENT", "Argument '$name' must be at least $it", false) }
-                field.get("maximum")?.asDouble?.let { if (number > it) throw PhoneToolException("INVALID_ARGUMENT", "Argument '$name' must be at most $it", false) }
-            }
-        }
     }
 
     private fun success(id: JsonElement, result: JsonObject) = JsonObject().apply {

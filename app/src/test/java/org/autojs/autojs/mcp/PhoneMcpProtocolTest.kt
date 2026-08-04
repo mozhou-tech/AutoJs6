@@ -24,7 +24,7 @@ class PhoneMcpProtocolTest {
     fun toolsListHasStableSchemasAndAnnotations() {
         val tools = protocol().request("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")
             .result().getAsJsonArray("tools")
-        assertEquals(36, tools.size())
+        assertEquals(38, tools.size())
         tools.forEach { element ->
             val tool = element.asJsonObject
             assertTrue(tool.get("name").asString.startsWith("phone_"))
@@ -54,6 +54,15 @@ class PhoneMcpProtocolTest {
         assertTrue(deviceActions.contains("set_brightness"))
         assertTrue(tools.map { it.asJsonObject.get("name").asString }.contains("phone_audio_control"))
         assertTrue(tools.map { it.asJsonObject.get("name").asString }.contains("phone_toast"))
+        val uiAction = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_ui_action" }
+        val uiActionProperties = uiAction.getAsJsonObject("inputSchema").getAsJsonObject("properties")
+        assertTrue(uiActionProperties.has("ancestor_text"))
+        assertTrue(uiActionProperties.has("descendant_text"))
+        assertTrue(uiActionProperties.has("expect_text_gone"))
+        val installApp = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_install_app" }
+        assertTrue(installApp.getAsJsonObject("annotations").get("destructiveHint").asBoolean)
+        assertTrue(installApp.getAsJsonObject("annotations").get("openWorldHint").asBoolean)
+        assertTrue(tools.map { it.asJsonObject.get("name").asString }.contains("phone_get_performance_metrics"))
     }
 
     @Test
@@ -97,6 +106,22 @@ class PhoneMcpProtocolTest {
         assertFalse(response.get("isError").asBoolean)
         assertEquals("phone_get_state", response.getAsJsonObject("structuredContent").get("tool").asString)
         assertEquals("text", response.getAsJsonArray("content")[0].asJsonObject.get("type").asString)
+    }
+
+    @Test
+    fun toolMayReturnCompactTextWithoutDuplicatingStructuredContent() {
+        val server = protocol { _, _, _ ->
+            PhoneToolExecution(
+                JsonObject().apply { addProperty("large", "structured") },
+                textSummary = "compact summary",
+            )
+        }
+        val response = server.request(
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"phone_get_state","arguments":{}}}""",
+        ).result()
+
+        assertEquals("compact summary", response.getAsJsonArray("content")[0].asJsonObject.get("text").asString)
+        assertEquals("structured", response.getAsJsonObject("structuredContent").get("large").asString)
     }
 
     private fun protocol(dispatcher: PhoneToolDispatcher = PhoneToolDispatcher { _, _, _ -> PhoneToolExecution(JsonObject()) }) =

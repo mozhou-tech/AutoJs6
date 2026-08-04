@@ -9,9 +9,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import org.autojs.autojs.AutoJs
 import org.autojs.autojs6.R
 import phonetailnet.Bridge
 import phonetailnet.Phonetailnet
@@ -61,16 +63,23 @@ class PhoneMcpService : Service() {
         val pairingToken = PhoneMcpPreferences.pairingToken(this)
         val authKey = PhoneMcpPreferences.authKey(this)
         val newBridge = Phonetailnet.newBridge()
-        val executor = PhoneToolExecutor(this) {
-            runCatching {
-                JsonParser.parseString(newBridge.statusJSON()).asJsonObject
-            }.getOrElse {
-                JsonObject().apply {
-                    addProperty("running", PhoneMcpRuntime.running)
-                    addProperty("last_error", PhoneMcpRuntime.lastError)
+        val executor = PhoneToolExecutor(
+            context = this,
+            transportStatus = {
+                runCatching {
+                    JsonParser.parseString(newBridge.statusJSON()).asJsonObject
+                }.getOrElse {
+                    JsonObject().apply {
+                        addProperty("running", PhoneMcpRuntime.running)
+                        addProperty("last_error", PhoneMcpRuntime.lastError)
+                    }
                 }
-            }
-        }
+            },
+            operationLogSink = { message ->
+                Log.i(TAG, message)
+                runCatching { AutoJs.instance.globalConsole.info(message) }
+            },
+        )
         val protocol = PhoneMcpProtocol(executor)
         val config = JsonObject().apply {
             addProperty("control_url", controlUrl)
@@ -182,6 +191,7 @@ class PhoneMcpService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val TAG = "PhoneMcpService"
         private const val CHANNEL_ID = "phone_mcp_server"
         private const val NOTIFICATION_ID = 0x4D43
         private const val ACTION_STOP = "org.autojs.autojs.mcp.STOP"

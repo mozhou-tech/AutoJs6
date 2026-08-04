@@ -19,6 +19,7 @@ const READ_CASES: Array<[string, Record<string, unknown>]> = [
   ["phone_list_apps", { query: "PhoneMCP", limit: 5 }],
   ["phone_get_app_info", { package_name: "org.autojs.autojs6" }],
   ["phone_get_jobs", { limit: 5 }],
+  ["phone_get_performance_metrics", { limit: 5 }],
 ];
 
 export async function verifyLivePhone(
@@ -26,8 +27,8 @@ export async function verifyLivePhone(
   caller: McpToolCaller,
   log: (message: string) => void = () => undefined,
 ): Promise<LiveVerifySummary> {
-  if (definitions.length !== 36) {
-    throw new Error(`Expected 36 PhoneMCP tools, server advertised ${definitions.length}.`);
+  if (definitions.length !== 38) {
+    throw new Error(`Expected 38 PhoneMCP tools, server advertised ${definitions.length}.`);
   }
   const tools = new Map(createPhoneMcpAgentTools(definitions, caller).map((tool) => [tool.name, tool]));
   const call = async (name: string, args: Record<string, unknown>) => {

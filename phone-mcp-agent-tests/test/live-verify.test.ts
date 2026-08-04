@@ -43,7 +43,7 @@ describe("extended live verifier", () => {
     const result = await verifyLivePhone(definitions(), caller, log);
 
     expect(result).toMatchObject({
-      catalogSize: 36,
+      catalogSize: 38,
       capabilityChecks: ["accessibility", "screen_capture", "ocr", "notification_access"],
       bridgeResult: "UGhvbmVNQ1A=",
       leaseReleased: true,
@@ -66,10 +66,11 @@ function definitions(): McpToolDefinition[] {
   const required = new Set([
     "phone_get_capabilities", "phone_get_state", "phone_get_transport_status", "phone_get_permissions",
     "phone_list_js_apis", "phone_wait_for", "phone_list_apps", "phone_get_app_info", "phone_get_jobs",
+    "phone_get_performance_metrics",
     "phone_ui_snapshot", "phone_capture_screen", "phone_ocr_read", "phone_get_notifications",
     "phone_toast", "phone_session_control", "phone_call_js_api",
   ]);
-  const names = [...required, ...Array.from({ length: 36 - required.size }, (_, index) => `phone_placeholder_${index}`)];
+  const names = [...required, ...Array.from({ length: 38 - required.size }, (_, index) => `phone_placeholder_${index}`)];
   return names.map((name) => ({
     name,
     description: name,

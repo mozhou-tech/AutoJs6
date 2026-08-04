@@ -28,6 +28,7 @@ data class PhoneToolSpec(
 data class PhoneToolExecution(
     val data: JsonObject,
     val additionalContent: JsonArray = JsonArray(),
+    val textSummary: String? = null,
 )
 
 fun interface PhoneToolDispatcher {
@@ -96,6 +97,7 @@ object PhoneToolSpecs {
             schema(
                 "max_nodes" to integer("Maximum nodes returned", 1, 2000),
                 "visible_only" to bool("Only include nodes visible to the user"),
+                "semantic_only" to bool("Only include nodes with semantics or actionable state"),
             ),
         ),
         read(
@@ -115,7 +117,7 @@ object PhoneToolSpecs {
             "phone_wait_for",
             "Wait for a UI selector, foreground package or screen state without client polling.",
             schema(
-                "condition" to enum("node_exists", "node_gone", "package", "screen_on", "screen_off"),
+                "condition" to enum("node_exists", "node_gone", "package", "package_installed", "package_removed", "screen_on", "screen_off"),
                 "timeout_ms" to integer("Maximum wait time", 100, 60000),
                 "text" to string(),
                 "resource_id" to string(),
@@ -135,7 +137,15 @@ object PhoneToolSpecs {
                 "resource_id" to string(),
                 "content_description" to string(),
                 "class_name" to string(),
+                "ancestor_text" to string(),
+                "ancestor_resource_id" to string(),
+                "descendant_text" to string(),
+                "descendant_resource_id" to string(),
                 "value" to string("Text used by set_text"),
+                "expect_package_name" to string("Expected foreground package after the action"),
+                "expect_text" to string("Text expected to appear after the action"),
+                "expect_text_gone" to string("Text expected to disappear after the action"),
+                "verification_timeout_ms" to integer("Post-action verification timeout", 100, 60000),
                 required = arrayOf("lease_id", "action"),
             ),
         ),
@@ -148,6 +158,10 @@ object PhoneToolSpecs {
                 "x" to integer(), "y" to integer(),
                 "end_x" to integer(), "end_y" to integer(),
                 "duration_ms" to integer("Gesture duration", 1, 60000),
+                "expect_package_name" to string("Expected foreground package after the gesture"),
+                "expect_text" to string("Text expected to appear after the gesture"),
+                "expect_text_gone" to string("Text expected to disappear after the gesture"),
+                "verification_timeout_ms" to integer("Post-gesture verification timeout", 100, 60000),
                 required = arrayOf("lease_id", "action", "x", "y"),
             ),
         ),
@@ -264,6 +278,13 @@ object PhoneToolSpecs {
             schema(lease, "uri" to string(), "package_name" to string(), required = arrayOf("lease_id", "uri")),
             openWorld = true,
         ),
+        write(
+            "phone_install_app",
+            "Install an APK from allowed storage through PackageInstaller and return an asynchronous job.",
+            schema(lease, "path" to string("APK path in allowed storage"), required = arrayOf("lease_id", "path")),
+            destructive = true,
+            openWorld = true,
+        ),
         read(
             "phone_get_notifications",
             "List active Android notifications when notification-listener access is enabled.",
@@ -308,6 +329,11 @@ object PhoneToolSpecs {
             "List asynchronous Phone MCP jobs.",
             paginationSchema("status" to string()),
         ),
+        read(
+            "phone_get_performance_metrics",
+            "Get secret-free per-tool latency and outcome aggregates for recent PhoneMCP calls.",
+            paginationSchema("tool" to string()),
+        ),
         write(
             "phone_cancel_job",
             "Cancel an asynchronous Phone MCP job.",
@@ -330,8 +356,10 @@ object PhoneToolSpecs {
         "snapshot_id" to string(), "node_id" to string(),
         "text" to string(), "resource_id" to string(),
         "content_description" to string(), "class_name" to string(),
+        "ancestor_text" to string(), "ancestor_resource_id" to string(),
+        "descendant_text" to string(), "descendant_resource_id" to string(),
         "match" to enum("exact", "contains", "regex"),
-        "clickable" to bool(), "editable" to bool(), "visible" to bool(),
+        "clickable" to bool(), "scrollable" to bool(), "editable" to bool(), "enabled" to bool(), "visible" to bool(),
         "limit" to integer("Maximum matches", 1, 100),
     )
 

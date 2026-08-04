@@ -78,8 +78,8 @@ async function callTool(tools: AgentTool[], name: string | undefined, rawArgs: s
 }
 
 async function runSmoke(tools: AgentTool[]): Promise<void> {
-  if (tools.length !== 36) {
-    throw new Error(`Expected 36 PhoneMCP tools, server advertised ${tools.length}.`);
+  if (tools.length !== 38) {
+    throw new Error(`Expected 38 PhoneMCP tools, server advertised ${tools.length}.`);
   }
   if (tools.some((tool) => !tool.name.startsWith("phone_"))) {
     throw new Error("The server advertised a tool without the required phone_ prefix.");

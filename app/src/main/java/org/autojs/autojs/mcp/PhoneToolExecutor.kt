@@ -6,11 +6,15 @@ import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.app.Notification
+import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageInstaller
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -65,19 +69,48 @@ import kotlin.math.roundToInt
 class PhoneToolExecutor(
     context: Context,
     private val transportStatus: () -> JsonObject,
+    operationLogSink: (String) -> Unit,
 ) : PhoneToolDispatcher {
 
     private val context = context.applicationContext
     private val gson = Gson()
     private val screenshotExecutor = Executors.newSingleThreadExecutor()
+    private val installExecutor = Executors.newSingleThreadExecutor()
     private val snapshots = LinkedHashMap<String, UiSnapshot>()
     private val snapshotLock = Any()
     private val leaseLock = Any()
+    private val operationTimer = PhoneMcpOperationTimer(sink = operationLogSink)
+    private val jobs = LinkedHashMap<String, PhoneJob>()
+    private val jobLock = Any()
     private var lease: ControlLease? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var activeToast: Toast? = null
 
-    override fun execute(name: String, args: JsonObject, peer: JsonObject): PhoneToolExecution = when (name) {
+    private val installResultReceiver = object : BroadcastReceiver() {
+        override fun onReceive(receiverContext: Context, intent: Intent) {
+            handleInstallResult(intent)
+        }
+    }
+
+    init {
+        ContextCompat.registerReceiver(
+            context,
+            installResultReceiver,
+            IntentFilter(ACTION_INSTALL_RESULT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    override fun execute(name: String, args: JsonObject, peer: JsonObject): PhoneToolExecution {
+        val startedAt = System.nanoTime()
+        return operationTimer.measure(name) { executeTool(name, args, peer) }.also { execution ->
+            if (!execution.data.has("duration_ms")) {
+                execution.data.addProperty("duration_ms", (System.nanoTime() - startedAt) / 1_000_000.0)
+            }
+        }
+    }
+
+    private fun executeTool(name: String, args: JsonObject, peer: JsonObject): PhoneToolExecution = when (name) {
         "phone_get_capabilities" -> execution(getCapabilities())
         "phone_get_state" -> execution(getState())
         "phone_get_transport_status" -> execution(transportStatus())
@@ -86,7 +119,12 @@ class PhoneToolExecutor(
         "phone_session_control" -> execution(sessionControl(args, peer))
         "phone_capture_screen" -> captureScreen(args)
         "phone_capture_context" -> captureContext(args)
-        "phone_ui_snapshot" -> execution(captureUiSnapshot(args).json)
+        "phone_ui_snapshot" -> captureUiSnapshot(args).let { snapshot ->
+            PhoneToolExecution(
+                snapshot.json,
+                textSummary = "UI snapshot ${snapshot.id}: package=${snapshot.packageName}, nodes=${snapshot.json.getAsJsonArray("nodes").size()}, truncated=${snapshot.json.get("truncated").asBoolean}",
+            )
+        }
         "phone_ui_find" -> execution(findUi(args))
         "phone_ocr_read" -> execution(ocrRead(args))
         "phone_wait_for" -> execution(waitFor(args))
@@ -104,6 +142,7 @@ class PhoneToolExecutor(
         "phone_get_app_info" -> execution(getAppInfo(args))
         "phone_app_control" -> write(args, peer) { execution(appControl(args)) }
         "phone_open_uri" -> write(args, peer) { execution(openUri(args)) }
+        "phone_install_app" -> write(args, peer) { execution(installApp(args)) }
         "phone_get_notifications" -> execution(getNotifications(args))
         "phone_notification_action" -> write(args, peer) { execution(notificationAction(args)) }
         "phone_get_clipboard" -> execution(getClipboard())
@@ -112,15 +151,22 @@ class PhoneToolExecutor(
         "phone_read_file" -> execution(readFile(args))
         "phone_write_file" -> write(args, peer) { execution(writeFile(args)) }
         "phone_manage_file" -> write(args, peer) { execution(manageFile(args)) }
-        "phone_get_jobs" -> execution(page(JsonArray(), 0, 20, 0))
-        "phone_cancel_job" -> write(args, peer) {
-            throw PhoneToolException("TARGET_NOT_FOUND", "No asynchronous job exists with id ${args.string("job_id")}")
-        }
+        "phone_get_jobs" -> execution(getJobs(args))
+        "phone_get_performance_metrics" -> execution(
+            PhoneMcpPerformanceMetrics.snapshot(
+                args.stringOrNull("tool"),
+                args.cursor(),
+                args.int("limit", 20).coerceIn(1, 100),
+            ),
+        )
+        "phone_cancel_job" -> write(args, peer) { execution(cancelJob(args)) }
         else -> throw PhoneToolException("TOOL_NOT_FOUND", "Unknown phone tool: $name", recoverable = false)
     }
 
     fun shutdown() {
         screenshotExecutor.shutdownNow()
+        installExecutor.shutdownNow()
+        runCatching { context.unregisterReceiver(installResultReceiver) }
         synchronized(snapshotLock) { snapshots.clear() }
         synchronized(leaseLock) { lease = null }
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
@@ -155,6 +201,20 @@ class PhoneToolExecutor(
             addProperty("shell", "app")
             addProperty("file_scope", "app_and_shared_storage")
             addProperty("embedded_tailnet", true)
+            val devicePolicy = context.getSystemService(DevicePolicyManager::class.java)
+            val managedOwner = devicePolicy?.isDeviceOwnerApp(context.packageName) == true ||
+                devicePolicy?.isProfileOwnerApp(context.packageName) == true
+            val privilegedInstaller = ContextCompat.checkSelfPermission(context, "android.permission.INSTALL_PACKAGES") == PackageManager.PERMISSION_GRANTED
+            val canRequestInstalls = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+            add("package_install", JsonObject().apply {
+                addProperty("request_install_packages", canRequestInstalls)
+                addProperty("device_owner", devicePolicy?.isDeviceOwnerApp(context.packageName) == true)
+                addProperty("profile_owner", devicePolicy?.isProfileOwnerApp(context.packageName) == true)
+                addProperty("privileged_installer", privilegedInstaller)
+                addProperty("silent_install", managedOwner || privilegedInstaller)
+                addProperty("requires_user_confirmation", !managedOwner && !privilegedInstaller)
+            })
+            addProperty("secure_ui_automation", false)
         })
     }
 
@@ -284,7 +344,11 @@ class PhoneToolExecutor(
                 add("ui_snapshot", snapshot.json)
                 add("ocr", ocr)
             }
-            PhoneToolExecution(data, JsonArray().apply { add(encoded.content) })
+            PhoneToolExecution(
+                data,
+                JsonArray().apply { add(encoded.content) },
+                "Captured synchronized screen, UI snapshot ${snapshot.id} and ${ocr.get("count").asInt} OCR items",
+            )
         } finally {
             bitmap.recycle()
         }
@@ -333,6 +397,7 @@ class PhoneToolExecutor(
             ?: throw PhoneToolException("TARGET_NOT_FOUND", "The active window has no accessibility root")
         val maxNodes = args.int("max_nodes", 1000).coerceIn(1, 2000)
         val visibleOnly = args.boolean("visible_only", false)
+        val semanticOnly = args.boolean("semantic_only", false)
         val id = "snap_${UUID.randomUUID()}"
         val nodes = ArrayList<SnapshotNode>()
         fun visit(node: AccessibilityNodeInfo, parentId: String?, depth: Int) {
@@ -347,13 +412,22 @@ class PhoneToolExecutor(
         }
         visit(root, null, 0)
         val now = System.currentTimeMillis()
+        val jsonNodes = if (!semanticOnly) nodes else {
+            val byId = nodes.associateBy(SnapshotNode::id)
+            val included = linkedSetOf<String>()
+            nodes.filter(SnapshotNode::hasSemantics).forEach { node ->
+                var current: SnapshotNode? = node
+                while (current != null && included.add(current.id)) current = current.parentId?.let(byId::get)
+            }
+            nodes.filter { it.id in included }
+        }
         val json = JsonObject().apply {
             addProperty("snapshot_id", id)
             addProperty("created_at", now)
             addProperty("package_name", root.packageName?.toString())
             addProperty("window_count", service.windows.size)
             addProperty("truncated", nodes.size >= maxNodes)
-            add("nodes", JsonArray().apply { nodes.forEach { add(it.toJson()) } })
+            add("nodes", JsonArray().apply { jsonNodes.forEach { add(it.toJson()) } })
         }
         return UiSnapshot(id, now, root.packageName?.toString(), nodes, json).also { snapshot ->
             synchronized(snapshotLock) {
@@ -419,6 +493,10 @@ class PhoneToolExecutor(
                     if (condition == "node_exists") found else !found
                 }
                 "package" -> AccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() == args.string("package_name")
+                "package_installed", "package_removed" -> {
+                    val installed = runCatching { packageInfo(context.packageManager, args.string("package_name")) }.isSuccess
+                    if (condition == "package_installed") installed else !installed
+                }
                 "screen_on" -> context.getSystemService(PowerManager::class.java)?.isInteractive == true
                 "screen_off" -> context.getSystemService(PowerManager::class.java)?.isInteractive == false
                 else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported wait condition: $condition", false)
@@ -427,6 +505,17 @@ class PhoneToolExecutor(
                 addProperty("matched", true)
                 addProperty("condition", condition)
                 addProperty("matched_at", System.currentTimeMillis())
+                if (condition.startsWith("node_")) {
+                    val snapshot = captureUiSnapshot(JsonObject().apply { addProperty("semantic_only", true) })
+                    addProperty("snapshot_id", snapshot.id)
+                    add("items", JsonArray().apply {
+                        matchingNodes(snapshot, JsonObject().apply {
+                            args.stringOrNull("text")?.let { addProperty("text", it) }
+                            args.stringOrNull("resource_id")?.let { addProperty("resource_id", it) }
+                        }).take(20).forEach { add(it.toJson()) }
+                    })
+                }
+                args.stringOrNull("package_name")?.let { addProperty("package_name", it) }
             }
             Thread.sleep(250)
         } while (System.currentTimeMillis() < deadline)
@@ -441,6 +530,12 @@ class PhoneToolExecutor(
             ?: run {
                 val count = matchingNodes(snapshot, args).size
                 if (count > 1) throw PhoneToolException("AMBIGUOUS_TARGET", "Selector matched $count nodes; provide snapshot_id and node_id")
+                if (isProtectedConfirmationWindow()) {
+                    throw PhoneToolException(
+                        "PROTECTED_CONFIRMATION",
+                        "The system confirmation control is not exposed to accessibility; direct user action is required",
+                    )
+                }
                 throw PhoneToolException("TARGET_NOT_FOUND", "No accessibility node matched the target")
             }
         val actionName = args.string("action")
@@ -466,11 +561,15 @@ class PhoneToolExecutor(
             else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported UI action: $actionName", false)
         }
         if (!success) throw PhoneToolException("ACTION_FAILED", "Accessibility action '$actionName' was rejected by the target node")
+        val verification = verifyAction(args)
         return JsonObject().apply {
             addProperty("performed", true)
+            addProperty("dispatched", true)
+            addProperty("effect_observed", verification.get("status").asString == "passed")
             addProperty("action", actionName)
             addProperty("snapshot_id", snapshot.id)
             addProperty("node_id", node.id)
+            add("verification", verification)
         }
     }
 
@@ -488,7 +587,61 @@ class PhoneToolExecutor(
             else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported gesture: $action", false)
         }
         if (!success) throw PhoneToolException("ACTION_FAILED", "Gesture '$action' was cancelled")
-        return JsonObject().apply { addProperty("performed", true); addProperty("action", action) }
+        val verification = verifyAction(args)
+        return JsonObject().apply {
+            addProperty("performed", true)
+            addProperty("dispatched", true)
+            addProperty("effect_observed", verification.get("status").asString == "passed")
+            addProperty("action", action)
+            add("verification", verification)
+        }
+    }
+
+    private fun verifyAction(args: JsonObject): JsonObject {
+        val expectedPackage = args.stringOrNull("expect_package_name")
+        val expectedText = args.stringOrNull("expect_text")
+        val expectedTextGone = args.stringOrNull("expect_text_gone")
+        if (expectedPackage == null && expectedText == null && expectedTextGone == null) {
+            return JsonObject().apply { addProperty("status", "not_requested") }
+        }
+        val timeout = args.long("verification_timeout_ms", 5_000).coerceIn(100, 60_000)
+        val deadline = System.currentTimeMillis() + timeout
+        do {
+            val packageMatches = expectedPackage == null ||
+                AccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() == expectedPackage
+            val textState = if (expectedText == null && expectedTextGone == null) true else runCatching {
+                val snapshot = captureUiSnapshot(JsonObject().apply {
+                    addProperty("visible_only", true)
+                    addProperty("semantic_only", true)
+                    addProperty("max_nodes", 500)
+                })
+                val appears = expectedText == null || matchingNodes(snapshot, JsonObject().apply { addProperty("text", expectedText) }).isNotEmpty()
+                val gone = expectedTextGone == null || matchingNodes(snapshot, JsonObject().apply { addProperty("text", expectedTextGone) }).isEmpty()
+                appears && gone
+            }.getOrDefault(false)
+            if (packageMatches && textState) {
+                return JsonObject().apply {
+                    addProperty("status", "passed")
+                    addProperty("verified_at", System.currentTimeMillis())
+                }
+            }
+            Thread.sleep(100)
+        } while (System.currentTimeMillis() < deadline)
+        return JsonObject().apply {
+            addProperty("status", if (isProtectedConfirmationWindow()) "blocked" else "failed")
+            addProperty("reason", if (isProtectedConfirmationWindow()) "PROTECTED_CONFIRMATION" else "POSTCONDITION_NOT_MET")
+            addProperty("timeout_ms", timeout)
+        }
+    }
+
+    private fun isProtectedConfirmationWindow(): Boolean {
+        val packageName = AccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() ?: return false
+        return packageName in setOf(
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.google.android.permissioncontroller",
+            "com.android.permissioncontroller",
+        )
     }
 
     private fun globalAction(args: JsonObject): JsonObject {
@@ -699,6 +852,7 @@ class PhoneToolExecutor(
     }
 
     private fun actionSequence(args: JsonObject, peer: JsonObject): PhoneToolExecution {
+        val sequenceStartedAt = System.nanoTime()
         val steps = args.array("steps")
         if (steps.size() > 50) throw PhoneToolException("INVALID_ARGUMENT", "A sequence can contain at most 50 steps", false)
         val results = JsonArray()
@@ -717,15 +871,22 @@ class PhoneToolExecutor(
             if (tool == "phone_action_sequence" || tool == "phone_session_control") {
                 throw PhoneToolException("INVALID_ARGUMENT", "Nested sequences and session control are not allowed", false)
             }
+            val spec = PhoneToolSpecs.all.find { it.name == tool }
+                ?: throw PhoneToolException("TOOL_NOT_FOUND", "Unknown phone tool in sequence step $index: $tool", false)
             val stepArgs = step.objectOrEmpty("arguments").deepCopy().apply {
-                if (!has("lease_id")) addProperty("lease_id", leaseId)
+                if (spec.inputSchema.getAsJsonObject("properties")?.has("lease_id") == true && !has("lease_id")) {
+                    addProperty("lease_id", leaseId)
+                }
             }
+            val startedAt = System.nanoTime()
             try {
+                PhoneToolArgumentValidator.validate(spec.inputSchema, stepArgs)
                 val result = execute(tool, stepArgs, peer)
                 results.add(JsonObject().apply {
                     addProperty("index", index)
                     addProperty("tool", tool)
                     addProperty("ok", true)
+                    addProperty("duration_ms", (System.nanoTime() - startedAt) / 1_000_000.0)
                     add("data", result.data)
                 })
             } catch (error: PhoneToolException) {
@@ -733,6 +894,7 @@ class PhoneToolExecutor(
                     addProperty("index", index)
                     addProperty("tool", tool)
                     addProperty("ok", false)
+                    addProperty("duration_ms", (System.nanoTime() - startedAt) / 1_000_000.0)
                     addProperty("error_code", error.code)
                     addProperty("message", error.message)
                 })
@@ -742,6 +904,7 @@ class PhoneToolExecutor(
         return execution(JsonObject().apply {
             addProperty("completed", results.count { it.asJsonObject.get("ok").asBoolean })
             addProperty("total", steps.size())
+            addProperty("duration_ms", (System.nanoTime() - sequenceStartedAt) / 1_000_000.0)
             add("steps", results)
         })
     }
@@ -911,6 +1074,175 @@ class PhoneToolExecutor(
         return JsonObject().apply { addProperty("performed", true); addProperty("uri", uri.toString()) }
     }
 
+    private fun installApp(args: JsonObject): JsonObject {
+        val apk = allowedFile(args.string("path"), mustExist = true)
+        if (!apk.isFile || !apk.name.endsWith(".apk", ignoreCase = true)) {
+            throw PhoneToolException("INVALID_ARGUMENT", "path must reference an existing APK file", false)
+        }
+        val packageInfo = context.packageManager.getPackageArchiveInfo(apk.path, 0)
+            ?: throw PhoneToolException("INVALID_ARGUMENT", "The APK package metadata could not be parsed", false)
+        val devicePolicy = context.getSystemService(DevicePolicyManager::class.java)
+        val managedOwner = devicePolicy?.isDeviceOwnerApp(context.packageName) == true ||
+            devicePolicy?.isProfileOwnerApp(context.packageName) == true
+        val privilegedInstaller = ContextCompat.checkSelfPermission(
+            context,
+            "android.permission.INSTALL_PACKAGES",
+        ) == PackageManager.PERMISSION_GRANTED
+        val canRequestInstalls = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+        if (!managedOwner && !privilegedInstaller && !canRequestInstalls) {
+            throw PhoneToolException(
+                "PERMISSION_REQUIRED",
+                "Allow PhoneMCP to install unknown apps before creating an installation job",
+                false,
+            )
+        }
+        val job = PhoneJob(
+            id = "job_${UUID.randomUUID()}",
+            type = "install",
+            state = "queued",
+            phase = "queued",
+            packageName = packageInfo.packageName,
+            versionName = packageInfo.versionName,
+            versionCode = packageInfo.longVersionCode,
+            sourcePath = apk.path,
+            createdAt = System.currentTimeMillis(),
+        )
+        synchronized(jobLock) { jobs[job.id] = job }
+        installExecutor.execute { runInstallJob(job, apk) }
+        return job.toJson()
+    }
+
+    private fun runInstallJob(job: PhoneJob, apk: File) {
+        updateJob(job) { state = "running"; phase = "verifying_package"; progress = 10; updatedAt = System.currentTimeMillis() }
+        try {
+            val installer = context.packageManager.packageInstaller
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                setAppPackageName(job.packageName)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val policy = context.getSystemService(DevicePolicyManager::class.java)
+                    val managedOwner = policy?.isDeviceOwnerApp(context.packageName) == true ||
+                        policy?.isProfileOwnerApp(context.packageName) == true
+                    val privileged = ContextCompat.checkSelfPermission(context, "android.permission.INSTALL_PACKAGES") == PackageManager.PERMISSION_GRANTED
+                    setRequireUserAction(
+                        if (managedOwner || privileged) PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED
+                        else PackageInstaller.SessionParams.USER_ACTION_REQUIRED,
+                    )
+                }
+            }
+            val sessionId = installer.createSession(params)
+            updateJob(job) { this.sessionId = sessionId; phase = "writing_package"; progress = 30; updatedAt = System.currentTimeMillis() }
+            installer.openSession(sessionId).use { session ->
+                apk.inputStream().use { input ->
+                    session.openWrite("base.apk", 0, apk.length()).use { output ->
+                        input.copyTo(output)
+                        session.fsync(output)
+                    }
+                }
+                updateJob(job) { phase = "installing"; progress = 70; updatedAt = System.currentTimeMillis() }
+                val callback = Intent(ACTION_INSTALL_RESULT).apply {
+                    setPackage(context.packageName)
+                    putExtra(EXTRA_JOB_ID, job.id)
+                }
+                val pending = PendingIntent.getBroadcast(
+                    context,
+                    job.id.hashCode(),
+                    callback,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+                )
+                session.commit(pending.intentSender)
+            }
+        } catch (error: Throwable) {
+            updateJob(job) {
+                state = "failed"
+                phase = "failed"
+                errorCode = (error as? SecurityException)?.let { "PRIVILEGE_REQUIRED" } ?: "INSTALL_FAILED"
+                updatedAt = System.currentTimeMillis()
+            }
+        }
+    }
+
+    private fun handleInstallResult(intent: Intent) {
+        val jobId = intent.getStringExtra(EXTRA_JOB_ID) ?: return
+        val job = synchronized(jobLock) { jobs[jobId] } ?: return
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                val confirmation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT) as? Intent
+                }
+                updateJob(job) {
+                    state = "waiting_user_action"
+                    phase = "waiting_user_action"
+                    progress = 80
+                    resumeToken = "resume_${UUID.randomUUID()}"
+                    confirmationPackage = confirmation?.component?.packageName ?: confirmation?.`package`
+                    updatedAt = System.currentTimeMillis()
+                }
+                if (confirmation == null) {
+                    updateJob(job) {
+                        state = "failed"
+                        phase = "failed"
+                        errorCode = "MISSING_USER_ACTION_INTENT"
+                        updatedAt = System.currentTimeMillis()
+                    }
+                } else {
+                    runCatching {
+                        confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(confirmation)
+                    }.onFailure {
+                        updateJob(job) {
+                            state = "failed"
+                            phase = "failed"
+                            errorCode = "USER_ACTION_UNAVAILABLE"
+                            updatedAt = System.currentTimeMillis()
+                        }
+                    }
+                }
+            }
+            PackageInstaller.STATUS_SUCCESS -> {
+                val installed = runCatching { packageInfo(context.packageManager, job.packageName) }.getOrNull()
+                val verified = installed != null && installed.longVersionCode == job.versionCode
+                updateJob(job) {
+                    state = if (verified) "succeeded" else "failed"
+                    phase = if (verified) "installed" else "failed"
+                    progress = if (verified) 100 else progress
+                    errorCode = if (verified) null else "INSTALL_VERIFICATION_FAILED"
+                    updatedAt = System.currentTimeMillis()
+                }
+            }
+            else -> updateJob(job) {
+                state = "failed"
+                phase = "failed"
+                errorCode = "PACKAGE_INSTALLER_$status"
+                updatedAt = System.currentTimeMillis()
+            }
+        }
+    }
+
+    private fun getJobs(args: JsonObject): JsonObject {
+        val status = args.stringOrNull("status")
+        val offset = args.cursor()
+        val limit = args.int("limit", 20).coerceIn(1, 100)
+        val values = synchronized(jobLock) {
+            jobs.values.filter { status == null || it.state == status }.sortedByDescending(PhoneJob::createdAt)
+        }
+        return page(JsonArray().apply { values.drop(offset).take(limit).forEach { add(it.toJson()) } }, offset, limit, values.size)
+    }
+
+    private fun cancelJob(args: JsonObject): JsonObject {
+        val job = synchronized(jobLock) { jobs[args.string("job_id")] }
+            ?: throw PhoneToolException("TARGET_NOT_FOUND", "No asynchronous job exists with id ${args.string("job_id")}")
+        if (job.state in setOf("succeeded", "failed", "cancelled")) return job.toJson()
+        job.sessionId?.let { runCatching { context.packageManager.packageInstaller.abandonSession(it) } }
+        updateJob(job) { state = "cancelled"; phase = "cancelled"; updatedAt = System.currentTimeMillis() }
+        return job.toJson()
+    }
+
+    private fun updateJob(job: PhoneJob, block: PhoneJob.() -> Unit) = synchronized(jobLock) { job.block() }
+
     private fun getNotifications(args: JsonObject): JsonObject {
         val service = NotificationListenerService.instance
             ?: throw PhoneToolException("PERMISSION_REQUIRED", "Notification-listener access is not enabled")
@@ -1052,10 +1384,14 @@ class PhoneToolExecutor(
 
     private fun matchingNodes(snapshot: UiSnapshot, args: JsonObject): List<SnapshotNode> {
         args.stringOrNull("node_id")?.let { id -> return snapshot.nodes.filter { it.id == id } }
-        val text = args.stringOrNull("text")
-        val resourceId = args.stringOrNull("resource_id")
+        val descendantText = args.stringOrNull("descendant_text")
+        val descendantResourceId = args.stringOrNull("descendant_resource_id")
+        val text = descendantText ?: args.stringOrNull("text")
+        val resourceId = descendantResourceId ?: args.stringOrNull("resource_id")
         val description = args.stringOrNull("content_description")
         val className = args.stringOrNull("class_name")
+        val ancestorText = args.stringOrNull("ancestor_text")
+        val ancestorResourceId = args.stringOrNull("ancestor_resource_id")
         val match = args.stringOrNull("match") ?: "exact"
         fun matches(actual: CharSequence?, expected: String?): Boolean {
             if (expected == null) return true
@@ -1066,14 +1402,27 @@ class PhoneToolExecutor(
                 else -> value == expected
             }
         }
+        val byId = snapshot.nodes.associateBy(SnapshotNode::id)
+        fun hasMatchingAncestor(node: SnapshotNode): Boolean {
+            if (ancestorText == null && ancestorResourceId == null) return true
+            var parent = node.parentId?.let(byId::get)
+            while (parent != null) {
+                if (matches(parent.info.text, ancestorText) && matches(parent.info.viewIdResourceName, ancestorResourceId)) return true
+                parent = parent.parentId?.let(byId::get)
+            }
+            return false
+        }
         return snapshot.nodes.filter { node ->
             val info = node.info
             matches(info.text, text) &&
                 matches(info.viewIdResourceName, resourceId) &&
                 matches(info.contentDescription, description) &&
                 matches(info.className, className) &&
+                hasMatchingAncestor(node) &&
                 (!args.has("clickable") || info.isClickable == args.get("clickable").asBoolean) &&
+                (!args.has("scrollable") || info.isScrollable == args.get("scrollable").asBoolean) &&
                 (!args.has("editable") || info.isEditable == args.get("editable").asBoolean) &&
+                (!args.has("enabled") || info.isEnabled == args.get("enabled").asBoolean) &&
                 (!args.has("visible") || info.isVisibleToUser == args.get("visible").asBoolean)
         }
     }
@@ -1194,6 +1543,46 @@ class PhoneToolExecutor(
 
     private data class ControlLease(val id: String, val owner: String, val expiresAt: Long)
 
+    private data class PhoneJob(
+        val id: String,
+        val type: String,
+        var state: String,
+        var phase: String,
+        val packageName: String,
+        val versionName: String?,
+        val versionCode: Long,
+        val sourcePath: String,
+        val createdAt: Long,
+        var updatedAt: Long = createdAt,
+        var progress: Int = 0,
+        var sessionId: Int? = null,
+        var resumeToken: String? = null,
+        var confirmationPackage: String? = null,
+        var errorCode: String? = null,
+    ) {
+        fun toJson() = JsonObject().apply {
+            addProperty("job_id", id)
+            addProperty("type", type)
+            addProperty("state", state)
+            addProperty("phase", phase)
+            addProperty("package_name", packageName)
+            addProperty("version_name", versionName)
+            addProperty("version_code", versionCode)
+            addProperty("progress", progress)
+            addProperty("created_at", createdAt)
+            addProperty("updated_at", updatedAt)
+            addProperty("duration_ms", updatedAt - createdAt)
+            resumeToken?.let {
+                addProperty("resume_token", it)
+                add("required_action", JsonObject().apply {
+                    addProperty("type", "manual_confirmation")
+                    confirmationPackage?.let { packageName -> addProperty("foreground_package", packageName) }
+                })
+            }
+            errorCode?.let { addProperty("error_code", it) }
+        }
+    }
+
     private data class EncodedScreen(val metadata: JsonObject, val content: JsonObject)
 
     private data class UiSnapshot(
@@ -1205,6 +1594,11 @@ class PhoneToolExecutor(
     )
 
     private data class SnapshotNode(val id: String, val parentId: String?, val info: AccessibilityNodeInfo) {
+        fun hasSemantics(): Boolean = info.text?.isNotBlank() == true ||
+            info.contentDescription?.isNotBlank() == true ||
+            !info.viewIdResourceName.isNullOrBlank() ||
+            info.isClickable || info.isLongClickable || info.isScrollable || info.isEditable
+
         fun toJson() = JsonObject().apply {
             val bounds = Rect().also(info::getBoundsInScreen)
             addProperty("node_id", id)
@@ -1229,6 +1623,8 @@ class PhoneToolExecutor(
 
     companion object {
         private const val PackageInfoFlagGranted = PackageInfo.REQUESTED_PERMISSION_GRANTED
+        private const val ACTION_INSTALL_RESULT = "org.autojs.autojs.mcp.INSTALL_RESULT"
+        private const val EXTRA_JOB_ID = "job_id"
 
         private fun rectJson(rect: Rect) = JsonArray().apply {
             add(rect.left); add(rect.top); add(rect.right); add(rect.bottom)

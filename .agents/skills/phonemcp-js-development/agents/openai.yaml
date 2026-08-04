@@ -1,0 +1,4 @@
+interface:
+  display_name: "PhoneMCP JavaScript and MCP Testing"
+  short_description: "Develop scripts and validate PhoneMCP tools end to end"
+  default_prompt: "Use $phonemcp-js-development to develop a PhoneMCP script or validate its MCP tools with the repository test harness."

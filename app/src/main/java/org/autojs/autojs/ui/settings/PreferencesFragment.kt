@@ -5,6 +5,7 @@ import android.view.View
 import android.widget.EdgeEffect
 import androidx.preference.PreferenceFragmentCompat
 import androidx.recyclerview.widget.RecyclerView
+import org.autojs.autojs.mcp.PhoneMcpSettingsActivity
 import org.autojs.autojs.theme.ThemeColorManager
 import org.autojs.autojs.util.ViewUtils.excludePaddingClippableViewFromBottomNavigationBar
 import org.autojs.autojs6.R
@@ -13,6 +14,11 @@ class PreferencesFragment : PreferenceFragmentCompat() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.fragment_preferences, rootKey)
+        findPreference<androidx.preference.Preference>("phone_mcp_settings_entry")
+            ?.setOnPreferenceClickListener {
+                startActivity(android.content.Intent(requireContext(), PhoneMcpSettingsActivity::class.java))
+                true
+            }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {

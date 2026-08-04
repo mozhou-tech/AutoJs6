@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Read-only evaluation fixture for the Android 16 arm64 emulator used by this
+  project. Prerequisites: AutoJs6 6.7.0 (3805), accessibility enabled, Phone
+  MCP local-only mode enabled on port 8765, notification listener disabled.
+  Re-baseline answers when the fixture or app version changes.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Find the installed application labeled AutoJs6, inspect its package details, and report its version name exactly.</question>
+    <answer>6.7.0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Locate AutoJs6 through the paginated application catalog, verify that it is launchable, and report its numeric version code.</question>
+    <answer>3805</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Cross-check device capabilities, permission state, and current phone state. What Android release is this fixture running?</question>
+    <answer>16</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inspect display and platform capabilities, then verify screen capture is available. What Android SDK integer does the fixture report?</question>
+    <answer>36</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare the native display dimensions with a half-width PNG capture. Report the native dimensions as WIDTHxHEIGHT.</question>
+    <answer>1080x2424</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Capture a PNG constrained to 540 pixels wide and compare its aspect ratio with the native display. Report the resulting dimensions as WIDTHxHEIGHT.</question>
+    <answer>540x1212</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Verify the embedded-tailnet capability and inspect the secret-free transport status. What hostname is assigned to this MCP node?</question>
+    <answer>phone-mcp-sdk-gphone64-arm64</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inspect both Tailnet and loopback ports and determine which port the local-only fixture exposes. Answer with the integer only.</question>
+    <answer>8765</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare notification runtime permission, special-access state, and reported capabilities. Is notification content currently readable? Answer true or false.</question>
+    <answer>false</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare root, Shizuku, and shell capability fields, then identify the effective privilege tier exposed by the server. Answer with the tier name only.</question>
+    <answer>app</answer>
+  </qa_pair>
+</evaluation>

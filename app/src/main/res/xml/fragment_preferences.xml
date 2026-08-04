@@ -4,6 +4,18 @@
 
     <org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory
         app:layout="@layout/preference_category_custom"
+        app:title="@string/phone_mcp_title">
+
+        <Preference
+            app:key="phone_mcp_settings_entry"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_title"
+            app:summary="@string/phone_mcp_summary" />
+
+    </org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory>
+
+    <org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory
+        app:layout="@layout/preference_category_custom"
         app:title="@string/text_appearance">
 
         <org.autojs.autojs.ui.settings.AppLanguagePreference

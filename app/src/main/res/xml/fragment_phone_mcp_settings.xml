@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory
+        app:layout="@layout/preference_category_custom"
+        app:title="@string/phone_mcp_server_category">
+
+        <org.autojs.autojs.theme.preference.ThemeColorSwitchPreference
+            app:key="phone_mcp_enabled"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_enable"
+            app:summary="@string/phone_mcp_enable_summary"
+            app:defaultValue="false" />
+
+        <Preference
+            app:key="phone_mcp_status"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_status"
+            app:summary="@string/phone_mcp_status_stopped"
+            app:selectable="false" />
+
+        <org.autojs.autojs.theme.preference.ThemeColorSwitchPreference
+            app:key="phone_mcp_local_only"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_local_only"
+            app:summary="@string/phone_mcp_local_only_summary"
+            app:defaultValue="false" />
+
+    </org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory>
+
+    <org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory
+        app:layout="@layout/preference_category_custom"
+        app:title="@string/phone_mcp_headscale_category">
+
+        <EditTextPreference
+            app:key="phone_mcp_control_url"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_control_url"
+            app:dialogTitle="@string/phone_mcp_control_url"
+            app:dialogMessage="@string/phone_mcp_control_url_hint" />
+
+        <EditTextPreference
+            app:key="phone_mcp_auth_key"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_auth_key"
+            app:summary="@string/phone_mcp_auth_key_summary"
+            app:dialogTitle="@string/phone_mcp_auth_key" />
+
+        <EditTextPreference
+            app:key="phone_mcp_hostname"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_hostname"
+            app:dialogTitle="@string/phone_mcp_hostname" />
+
+        <EditTextPreference
+            app:key="phone_mcp_tailnet_port"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_tailnet_port"
+            app:defaultValue="8765"
+            app:dialogTitle="@string/phone_mcp_tailnet_port" />
+
+        <EditTextPreference
+            app:key="phone_mcp_local_port"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_local_port"
+            app:summary="@string/phone_mcp_local_port_summary"
+            app:defaultValue="8765"
+            app:dialogTitle="@string/phone_mcp_local_port" />
+
+    </org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory>
+
+    <org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory
+        app:layout="@layout/preference_category_custom"
+        app:title="@string/phone_mcp_security_category">
+
+        <Preference
+            app:key="phone_mcp_pairing_token"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_copy_token"
+            app:summary="@string/phone_mcp_copy_token_summary" />
+
+        <Preference
+            app:key="phone_mcp_regenerate_token"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_regenerate_token"
+            app:summary="@string/phone_mcp_regenerate_token_summary" />
+
+        <Preference
+            app:key="phone_mcp_reset_identity"
+            app:layout="@layout/preference_custom"
+            app:title="@string/phone_mcp_reset_identity"
+            app:summary="@string/phone_mcp_reset_identity_summary" />
+
+    </org.autojs.autojs.theme.preference.ThemeColorPreferenceCategory>
+
+</PreferenceScreen>

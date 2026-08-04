@@ -43,6 +43,9 @@ val isInrtTaskRequested = taskNames.any { it.contains(flavorNameInrt, true) }
 utils.registerTemplateApkCopy(project)
 
 dependencies /* Unclassified */ {
+    // Embedded Tailscale tsnet bridge for Phone MCP.
+    implementation(files("libs/phone-tailnet.aar"))
+
     // Compose
     // implementation("androidx.compose.ui:ui-android:1.6.7")
 

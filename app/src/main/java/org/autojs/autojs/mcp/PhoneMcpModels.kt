@@ -46,9 +46,17 @@ object PhoneToolSpecs {
 
     val all: List<PhoneToolSpec> = listOf(
         read("phone_get_capabilities", "Get Android, display, permission, accessibility, OCR and transport capabilities."),
-        read("phone_get_state", "Get current screen, foreground window, battery, network and control-session state."),
+        read("phone_get_state", "Get screen, foreground window, battery, memory, brightness, audio, network and control-session state."),
         read("phone_get_transport_status", "Get secret-free embedded Tailscale/Headscale transport status."),
         read("phone_get_permissions", "Get Android runtime and special permission status."),
+        read(
+            "phone_list_js_apis",
+            "List verified JSON-callable AutoJs6 atomic JavaScript APIs and their preferred native MCP tools.",
+            paginationSchema(
+                "category" to enum(*PhoneJsApiCatalog.categories.toTypedArray()),
+                "query" to string("Case-insensitive API path filter"),
+            ),
+        ),
         PhoneToolSpec(
             "phone_session_control",
             "Acquire, renew or release the exclusive phone write-control lease.",
@@ -146,7 +154,63 @@ object PhoneToolSpecs {
         write(
             "phone_global_action",
             "Perform an Android global action such as back, home, recents or opening notifications.",
-            schema(lease, "action" to enum("back", "home", "recents", "notifications", "quick_settings", "power_dialog", "lock_screen"), required = arrayOf("lease_id", "action")),
+            schema(
+                lease,
+                "action" to enum(
+                    "back", "home", "recents", "notifications", "quick_settings", "power_dialog", "lock_screen",
+                    "split_screen", "take_screenshot", "headset_hook", "accessibility_button",
+                    "accessibility_button_chooser", "accessibility_shortcut", "accessibility_all_apps",
+                    "dismiss_notification_shade",
+                ),
+                required = arrayOf("lease_id", "action"),
+            ),
+        ),
+        write(
+            "phone_vibrate",
+            "Vibrate once, play a timing pattern, or cancel active vibration.",
+            schema(
+                lease,
+                "action" to enum("once", "pattern", "cancel"),
+                "duration_ms" to integer("One-shot duration", 1, 60000),
+                "timings_ms" to array(integer("Alternating off/on durations", 0, 60000)),
+                "repeat_index" to integer("Pattern repeat index; -1 disables repetition", -1, 99),
+                required = arrayOf("lease_id", "action"),
+            ),
+        ),
+        write(
+            "phone_device_control",
+            "Wake or keep the display awake, release the MCP wake lock, or change screen brightness.",
+            schema(
+                lease,
+                "action" to enum("wake_screen", "keep_screen_on", "keep_screen_dim", "cancel_keep_awake", "set_brightness", "set_brightness_mode"),
+                "timeout_ms" to integer("Wake-lock timeout", 100, 3600000),
+                "brightness" to integer("Screen brightness", 0, 255),
+                "brightness_mode" to enum("manual", "automatic"),
+                required = arrayOf("lease_id", "action"),
+            ),
+        ),
+        write(
+            "phone_audio_control",
+            "Set or adjust an Android audio stream volume, including mute and unmute.",
+            schema(
+                lease,
+                "action" to enum("set", "adjust_up", "adjust_down", "mute", "unmute"),
+                "stream" to enum("music", "notification", "alarm", "ring", "system", "voice_call"),
+                "level" to integer("Absolute volume for set", 0, 100),
+                "show_ui" to bool("Show Android's volume overlay"),
+                required = arrayOf("lease_id", "action", "stream"),
+            ),
+        ),
+        write(
+            "phone_toast",
+            "Show a short Android toast or dismiss the toast last shown through MCP.",
+            schema(
+                lease,
+                "action" to enum("show", "dismiss"),
+                "text" to string("Toast text"),
+                "duration" to enum("short", "long"),
+                required = arrayOf("lease_id", "action"),
+            ),
         ),
         write(
             "phone_input_text",

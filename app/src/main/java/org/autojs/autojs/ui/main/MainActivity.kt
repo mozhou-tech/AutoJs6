@@ -13,6 +13,9 @@ import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.widget.SearchView
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.forEach
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.fragment.app.Fragment
@@ -58,7 +61,6 @@ import org.autojs.autojs.util.IntentUtils.startSafely
 import org.autojs.autojs.util.StringUtils.key
 import org.autojs.autojs.util.UpdateUtils
 import org.autojs.autojs.util.ViewUtils
-import org.autojs.autojs.util.ViewUtils.excludeFloatingActionButtonFromBottomNavigationBar
 import org.autojs.autojs.util.ViewUtils.onceGlobalLayout
 import org.autojs.autojs.util.ViewUtils.setMenuIconsColorByThemeColorLuminance
 import org.autojs.autojs.util.ViewUtils.setNavigationIconColorByThemeColorLuminance
@@ -162,10 +164,12 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
             val drawerLayout = it.drawerLayout
             setContentView(it.root)
             mViewPager = it.viewpager
-            mFab = it.fab.apply { excludeFloatingActionButtonFromBottomNavigationBar() }
+            mFab = it.fab
             mTab = it.tab
             mToolbar = it.toolbar
             addViewBackground(it.appBar)
+            addViewBackground(it.tab)
+            setUpBottomTabInsets(it)
             setUpToolbar(drawerLayout)
             setUpTabViewPager(it)
             registerBackPressHandlers(drawerLayout)
@@ -191,6 +195,21 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
             AllFilesAccessPermission(this),
             DisplayOverOtherAppsPermission(this),
         ).forEach { it.urgeIfNeeded() }
+    }
+
+    private fun setUpBottomTabInsets(binding: ActivityMainBinding) {
+        val tab = binding.tab
+        ViewCompat.setOnApplyWindowInsetsListener(binding.mainContent) { _, insets ->
+            val navigationBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            tab.setPadding(tab.paddingLeft, tab.paddingTop, tab.paddingRight, navigationBars.bottom)
+            WindowInsetsCompat.Builder(insets)
+                .setInsets(
+                    WindowInsetsCompat.Type.navigationBars(),
+                    Insets.of(navigationBars.left, navigationBars.top, navigationBars.right, 0),
+                )
+                .build()
+        }
+        ViewCompat.requestApplyInsets(binding.mainContent)
     }
 
     override fun onPostResume() {

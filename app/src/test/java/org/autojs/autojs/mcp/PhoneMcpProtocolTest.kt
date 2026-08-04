@@ -24,7 +24,7 @@ class PhoneMcpProtocolTest {
     fun toolsListHasStableSchemasAndAnnotations() {
         val tools = protocol().request("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")
             .result().getAsJsonArray("tools")
-        assertEquals(31, tools.size())
+        assertEquals(36, tools.size())
         tools.forEach { element ->
             val tool = element.asJsonObject
             assertTrue(tool.get("name").asString.startsWith("phone_"))
@@ -40,6 +40,20 @@ class PhoneMcpProtocolTest {
         val jsApi = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_call_js_api" }
         assertTrue(jsApi.getAsJsonObject("annotations").get("destructiveHint").asBoolean)
         assertTrue(jsApi.getAsJsonObject("annotations").get("openWorldHint").asBoolean)
+        val jsCatalog = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_list_js_apis" }
+        assertTrue(jsCatalog.getAsJsonObject("annotations").get("readOnlyHint").asBoolean)
+        val globalActions = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_global_action" }
+            .getAsJsonObject("inputSchema").getAsJsonObject("properties")
+            .getAsJsonObject("action").getAsJsonArray("enum").map { it.asString }
+        assertTrue(globalActions.contains("headset_hook"))
+        assertTrue(globalActions.contains("dismiss_notification_shade"))
+        val deviceControl = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_device_control" }
+        val deviceActions = deviceControl.getAsJsonObject("inputSchema").getAsJsonObject("properties")
+            .getAsJsonObject("action").getAsJsonArray("enum").map { it.asString }
+        assertTrue(deviceActions.contains("wake_screen"))
+        assertTrue(deviceActions.contains("set_brightness"))
+        assertTrue(tools.map { it.asJsonObject.get("name").asString }.contains("phone_audio_control"))
+        assertTrue(tools.map { it.asJsonObject.get("name").asString }.contains("phone_toast"))
     }
 
     @Test

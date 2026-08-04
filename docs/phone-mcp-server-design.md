@@ -18,15 +18,16 @@ Headscale 网络中的独立节点，但不接管整台手机的网络流量。�
 
 所有 MCP 工具统一使用 `phone_` 前缀和 `snake_case` 命名。
 
-### 1.1 当前实现状态（2026-08-03）
+### 1.1 当前实现状态（2026-08-04）
 
-第一版已经落地：Android 端提供 MCP JSON-RPC、31 个 `phone_` 工具、独占控制租约、
+第一版已经落地：Android 端提供 MCP JSON-RPC、36 个 `phone_` 工具、独占控制租约、
 前台服务、开机恢复和应用内设置入口；Go 桥接层基于 `tailscale.com v1.102.0` 与
 `gomobile` 生成 `phone-tailnet.aar`，覆盖 arm64-v8a 和 armeabi-v7a；为控制内置产物体积，
 不包含 x86 和 x86_64 模拟器 ABI。
-首页第二个标签页为“MCP”，直接展示手机 MCP 服务设置；“设置 → 手机 MCP 服务”仍保留
-为辅助入口。用户可配置 Headscale HTTPS Server、一次性预授权密钥、节点名、Tailnet
-端口和本地调试端口。
+首页采用底部“文件 / MCP / 插件 / 任务”导航，“MCP”为第二个标签页，直接展示手机
+MCP 服务设置；“设置 → 手机 MCP 服务”仍保留为辅助入口。底部导航适配 Android
+手势导航栏 inset，页面内容和浮动操作按钮不得遮挡标签。用户可配置 Headscale HTTPS
+Server、一次性预授权密钥、节点名、Tailnet 端口和本地调试端口。
 
 当前传输实现支持 MCP `2025-11-25` 与 `2025-06-18` 的 JSON-RPC 请求/响应子集，采用
 无状态 HTTP POST；第一版不启用 SSE。Go 层直接终止 HTTP、执行请求限制与应用层鉴权，
@@ -70,7 +71,7 @@ Agent 调用工具的业务端点。内嵌节点只承载 AutoJs6 MCP 流量，�
 
 ### 2.1 使用与连接
 
-1. 打开“设置 → 手机 MCP 服务”。
+1. 点击首页底部“MCP”标签；也可以从“设置 → 手机 MCP 服务”进入。
 2. 正式使用时填写 Headscale HTTPS Server、一次性预授权密钥和节点名；调试时可开启
    “仅本地调试”。
 3. 复制应用层配对令牌并启用服务。正式 MCP URL 为
@@ -521,10 +522,13 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 向当前输入目标写入文本，支持 `replace`、`append` 和 `insert`。参数可标记
 `sensitive=true`，敏感文本不得写入日志、错误信息、截图注释或审计详情。
 
-#### `phone_key_event`
+#### `phone_key_event`（规划）
 
 支持音量、媒体、方向、回车、删除等允许列表中的按键。电源键等高风险按键根据设备
-能力单独授权。
+能力单独授权。当前实现优先使用无需 root 的 `phone_global_action`，覆盖返回、主页、
+最近任务、通知栏、快捷设置、锁屏、分屏、耳机键和无障碍全局动作。AutoJs6 JS 中的
+`KeyCode`、`VolumeUp`、`Power`、`Camera` 实际依赖 root shell，只在
+`phone_list_js_apis` 中标记 `requires=root`，不宣称普通设备可执行。
 
 #### `phone_action_sequence`
 
@@ -581,8 +585,35 @@ action、category、data 和 extras 必须分别校验；禁止接受拼接后�
 
 #### `phone_device_control`
 
-控制亮屏、锁屏、旋转、亮度、音量和勿扰模式。每个 action 都必须通过能力发现明确
-声明是否支持，不允许静默降级为近似操作。
+当前 action 包含：
+
+- `wake_screen`：获取 500 ms 临时亮屏 WakeLock；
+- `keep_screen_on` / `keep_screen_dim`：按 `timeout_ms` 获取最长一小时的 WakeLock；
+- `cancel_keep_awake`：释放由 Phone MCP 持有的 WakeLock；
+- `set_brightness`：写入 0–255 亮度值；
+- `set_brightness_mode`：切换 `manual` / `automatic`。
+
+WakeLock 只属于 Phone MCP 执行器，服务关闭时必须释放，不能影响 AutoJs6 脚本自身持有
+的 WakeLock。亮度写入要求 Android“修改系统设置”特殊权限；缺失时返回明确的
+`PERMISSION_DENIED`，不得自动打开设置页或静默降级。旋转和勿扰模式仍属于后续规划。
+
+#### `phone_audio_control`
+
+支持 `music`、`notification`、`alarm`、`ring`、`system`、`voice_call` 六类音频流，
+action 为 `set`、`adjust_up`、`adjust_down`、`mute`、`unmute`。`set` 的输入会按设备
+实际最大音量裁剪；返回实际 `level`、`max_level` 和 `muted`，避免客户端假定设置已
+精确生效。`show_ui=true` 时允许 Android 显示音量面板。
+
+#### `phone_toast`
+
+`show` 显示短或长 Toast，`dismiss` 仅撤销最近一次由 Phone MCP 创建的 Toast，不影响
+其他应用或 AutoJs6 脚本的 Toast。Toast 创建和撤销统一切换到主线程，等待上限两秒。
+
+#### `phone_get_state` 的设备状态
+
+除前台窗口和控制租约外，当前返回电池百分比、充电状态和电源类型，可用/总内存与
+低内存标志，亮度与亮度模式，以及六类音频流的当前值、最大值和静音状态。原有
+`battery_percent` 字段保留，以兼容已接入客户端。
 
 #### `phone_get_setting` / `phone_set_setting`
 
@@ -688,6 +719,35 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 高风险 API 仍必须经过工具级策略、用户确认和审计，不能因为它来自合法 JS 命名空间
 而自动获得授权。
 
+#### JS 原子能力盘点与发现
+
+`phone_list_js_apis` 提供经过核对、适合 JSON 参数和同步返回值的 JS 原子 API 目录，
+可按 `category`、`query` 分页查询。目录返回 `api`、读写属性、前置能力，以及存在时的
+`preferred_tool`。调用方应优先选择参数更严格、权限和副作用更清晰的专用 MCP 工具，
+仅在没有专用映射时使用 `phone_call_js_api`。
+
+当前目录覆盖剪贴板、应用查询/启动、无障碍自动化、系统全局动作、设备/网络状态、
+振动反馈、文件路径、编码/摘要/颜色转换、运行时辅助及 Shell 按键等高频原子能力。
+其中 Shell `KeyCode`、音量、电源和相机按键明确标记为需要 root；不应因目录可见而
+假定当前设备能够执行。
+
+本轮同时补充：
+
+- `phone_vibrate`：一次振动、振动序列、取消振动；
+- `phone_device_control`：唤醒屏幕、限时保持亮屏/暗屏、释放 MCP WakeLock、设置亮度
+  和自动/手动亮度模式；亮度写入明确要求“修改系统设置”权限；
+- `phone_audio_control`：读取当前结果后设置、增减、静音或恢复音乐、通知、闹钟、
+  铃声、系统和通话音频流；
+- `phone_toast`：显示短/长 Toast，或撤销最近一次由 MCP 创建的 Toast；
+- `phone_global_action`：新增分屏、系统截图、耳机键、无障碍按钮/选择器/快捷方式、
+  无障碍应用列表和关闭通知栏；
+- `phone_get_capabilities`：增加 JS API 目录和振动硬件状态；
+- `phone_get_state`：增加充电状态/电源类型、内存、亮度模式及六类音频流状态。
+
+回调注册、事件监听、线程、对话框、悬浮窗、UI 构建、媒体播放器对象、数据库连接、
+文件流及 WebSocket 等能力具有长生命周期或返回不可序列化对象，不属于单次原子调用，
+后续应设计 resource/job/session 型专用工具，而不是直接塞入通用桥接。
+
 #### `phone_run_script`
 
 运行受限 AutoJs6 脚本。默认只运行本地已签名、用户选择或显式批准的脚本。内联脚本
@@ -770,33 +830,38 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 2. `phone_get_state`
 3. `phone_get_transport_status`
 4. `phone_get_permissions`
-5. `phone_session_control`
-6. `phone_capture_screen`
-7. `phone_capture_context`
-8. `phone_ui_snapshot`
-9. `phone_ui_find`
-10. `phone_ocr_read`
-11. `phone_wait_for`
-12. `phone_ui_action`
-13. `phone_gesture`
-14. `phone_global_action`
-15. `phone_input_text`
-16. `phone_action_sequence`
-17. `phone_call_js_api`
-18. `phone_list_apps`
-19. `phone_get_app_info`
-20. `phone_app_control`
-21. `phone_open_uri`
-22. `phone_get_notifications`
-23. `phone_notification_action`
-24. `phone_get_clipboard`
-25. `phone_set_clipboard`
-26. `phone_list_files`
-27. `phone_read_file`
-28. `phone_write_file`
-29. `phone_manage_file`
-30. `phone_get_jobs`
-31. `phone_cancel_job`
+5. `phone_list_js_apis`
+6. `phone_session_control`
+7. `phone_capture_screen`
+8. `phone_capture_context`
+9. `phone_ui_snapshot`
+10. `phone_ui_find`
+11. `phone_ocr_read`
+12. `phone_wait_for`
+13. `phone_ui_action`
+14. `phone_gesture`
+15. `phone_global_action`
+16. `phone_vibrate`
+17. `phone_device_control`
+18. `phone_audio_control`
+19. `phone_toast`
+20. `phone_input_text`
+21. `phone_action_sequence`
+22. `phone_call_js_api`
+23. `phone_list_apps`
+24. `phone_get_app_info`
+25. `phone_app_control`
+26. `phone_open_uri`
+27. `phone_get_notifications`
+28. `phone_notification_action`
+29. `phone_get_clipboard`
+30. `phone_set_clipboard`
+31. `phone_list_files`
+32. `phone_read_file`
+33. `phone_write_file`
+34. `phone_manage_file`
+35. `phone_get_jobs`
+36. `phone_cancel_job`
 
 第一版还包含内嵌 tsnet AAR、Headscale Server 本地配置、一次性 pre-auth key 注册、
 节点状态私有存储、Tailnet/回环 HTTP listener、应用层配对令牌及传输诊断界面。

@@ -14,47 +14,73 @@
         android:clipChildren="false"
         android:clipToPadding="false">
 
-        <com.google.android.material.appbar.AppBarLayout
-            android:id="@+id/app_bar"
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/main_content"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:clipToPadding="true"
-            android:fitsSystemWindows="true"
-            app:theme="@style/AppTheme.AppBarOverlay">
+            android:layout_height="match_parent">
 
-            <org.autojs.autojs.theme.widget.ThemeColorToolbar
-                android:id="@+id/toolbar"
+            <com.google.android.material.appbar.AppBarLayout
+                android:id="@+id/app_bar"
                 android:layout_width="match_parent"
-                android:layout_height="?attr/actionBarSize"
-                android:theme="@style/ToolBarStyle"
-                android:title="@string/app_name"
-                app:popupTheme="@style/PopupMenuTheme" />
+                android:layout_height="wrap_content"
+                android:clipToPadding="true"
+                android:fitsSystemWindows="true"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:theme="@style/AppTheme.AppBarOverlay">
+
+                <org.autojs.autojs.theme.widget.ThemeColorToolbar
+                    android:id="@+id/toolbar"
+                    android:layout_width="match_parent"
+                    android:layout_height="?attr/actionBarSize"
+                    android:theme="@style/ToolBarStyle"
+                    android:title="@string/app_name"
+                    app:popupTheme="@style/PopupMenuTheme" />
+
+            </com.google.android.material.appbar.AppBarLayout>
+
+            <org.autojs.autojs.ui.pager.ScrollControllableViewPager
+                android:id="@+id/viewpager"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:clipToPadding="false"
+                app:layout_constraintBottom_toTopOf="@id/tab"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/app_bar" />
 
             <com.google.android.material.tabs.TabLayout
                 android:id="@+id/tab"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:minHeight="?attr/actionBarSize"
                 app:tabGravity="fill"
                 app:tabMaxWidth="0dp"
-                app:tabMode="fixed" />
+                app:tabMode="fixed"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent" />
 
-        </com.google.android.material.appbar.AppBarLayout>
+            <View
+                android:id="@+id/fab_anchor"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:layout_marginBottom="16dp"
+                android:background="@android:color/transparent"
+                app:layout_constraintBottom_toTopOf="@id/tab"
+                app:layout_constraintEnd_toEndOf="parent" />
 
-        <org.autojs.autojs.ui.pager.ScrollControllableViewPager
-            android:id="@+id/viewpager"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
         <org.autojs.autojs.theme.widget.ThemeColorFloatingActionButton
             android:id="@+id/fab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="end|bottom"
+            android:layout_gravity="end|top"
             android:layout_margin="16dp"
             android:src="@drawable/ic_add_white_48dp"
-            app:layout_anchor="@id/viewpager"
+            app:layout_anchor="@id/fab_anchor"
             app:layout_anchorGravity="bottom|end"
             app:layout_behavior="org.autojs.autojs.ui.widget.ScrollAwareFABBehavior"
             android:alpha="0.9" />
@@ -63,24 +89,24 @@
             android:id="@+id/floating_action_menu"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="end|bottom"
+            android:layout_gravity="end|top"
             android:layout_margin="16dp"
             android:clipChildren="false"
             android:clipToPadding="false"
             android:visibility="invisible"
-            app:layout_anchor="@id/viewpager"
+            app:layout_anchor="@id/fab_anchor"
             app:layout_anchorGravity="bottom|end"/>
 
         <org.autojs.autojs.ui.main.plugin.PluginFloatingActionMenu
             android:id="@+id/plugin_floating_action_menu"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="end|bottom"
+            android:layout_gravity="end|top"
             android:layout_margin="16dp"
             android:clipChildren="false"
             android:clipToPadding="false"
             android:visibility="invisible"
-            app:layout_anchor="@id/viewpager"
+            app:layout_anchor="@id/fab_anchor"
             app:layout_anchorGravity="bottom|end"/>
 
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
@@ -95,4 +121,3 @@
         tools:layout="@layout/fragment_drawer" />
 
 </androidx.drawerlayout.widget.DrawerLayout>
-

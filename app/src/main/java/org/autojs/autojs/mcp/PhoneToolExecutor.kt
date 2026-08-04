@@ -10,6 +10,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -18,6 +19,7 @@ import android.graphics.Rect
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
@@ -25,11 +27,15 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Base64
 import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.JsonArray
@@ -68,12 +74,15 @@ class PhoneToolExecutor(
     private val snapshotLock = Any()
     private val leaseLock = Any()
     private var lease: ControlLease? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var activeToast: Toast? = null
 
     override fun execute(name: String, args: JsonObject, peer: JsonObject): PhoneToolExecution = when (name) {
         "phone_get_capabilities" -> execution(getCapabilities())
         "phone_get_state" -> execution(getState())
         "phone_get_transport_status" -> execution(transportStatus())
         "phone_get_permissions" -> execution(getPermissions())
+        "phone_list_js_apis" -> execution(listJsApis(args))
         "phone_session_control" -> execution(sessionControl(args, peer))
         "phone_capture_screen" -> captureScreen(args)
         "phone_capture_context" -> captureContext(args)
@@ -84,6 +93,10 @@ class PhoneToolExecutor(
         "phone_ui_action" -> write(args, peer) { execution(uiAction(args)) }
         "phone_gesture" -> write(args, peer) { execution(gesture(args)) }
         "phone_global_action" -> write(args, peer) { execution(globalAction(args)) }
+        "phone_vibrate" -> write(args, peer) { execution(vibrate(args)) }
+        "phone_device_control" -> write(args, peer) { execution(deviceControl(args)) }
+        "phone_audio_control" -> write(args, peer) { execution(audioControl(args)) }
+        "phone_toast" -> write(args, peer) { execution(toast(args)) }
         "phone_input_text" -> write(args, peer) { execution(inputText(args)) }
         "phone_action_sequence" -> write(args, peer) { actionSequence(args, peer) }
         "phone_call_js_api" -> write(args, peer) { execution(callJsApi(args)) }
@@ -110,6 +123,8 @@ class PhoneToolExecutor(
         screenshotExecutor.shutdownNow()
         synchronized(snapshotLock) { snapshots.clear() }
         synchronized(leaseLock) { lease = null }
+        runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+        Handler(Looper.getMainLooper()).post { activeToast?.cancel(); activeToast = null }
     }
 
     private fun getCapabilities() = JsonObject().apply {
@@ -129,6 +144,11 @@ class PhoneToolExecutor(
             addProperty("ocr", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("visual_context", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("js_api_bridge", true)
+            addProperty("js_api_catalog", true)
+            addProperty("vibration", vibrator()?.hasVibrator() == true)
+            addProperty("device_control", true)
+            addProperty("audio_control", context.getSystemService(AudioManager::class.java) != null)
+            addProperty("toast", true)
             addProperty("notification_access", NotificationListenerService.isNotificationListenerEnabled(context))
             addProperty("root", false)
             addProperty("shizuku", false)
@@ -142,12 +162,31 @@ class PhoneToolExecutor(
         val power = context.getSystemService(PowerManager::class.java)
         val keyguard = context.getSystemService(KeyguardManager::class.java)
         val battery = context.getSystemService(BatteryManager::class.java)
+        val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val activityManager = context.getSystemService(ActivityManager::class.java)
+        val memory = ActivityManager.MemoryInfo().also { activityManager?.getMemoryInfo(it) }
+        val audio = context.getSystemService(AudioManager::class.java)
         val root = AccessibilityService.instance?.rootInActiveWindow
         addProperty("screen_on", power?.isInteractive == true)
         addProperty("device_locked", keyguard?.isDeviceLocked == true)
         addProperty("foreground_package", root?.packageName?.toString())
         addProperty("foreground_class", root?.className?.toString())
         addProperty("battery_percent", battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1)
+        add("battery", JsonObject().apply {
+            addProperty("percent", battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1)
+            addProperty("charging", battery?.isCharging == true)
+            addProperty("source", batterySource(batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0))
+        })
+        add("memory", JsonObject().apply {
+            addProperty("available_bytes", memory.availMem)
+            addProperty("total_bytes", memory.totalMem)
+            addProperty("low_memory", memory.lowMemory)
+        })
+        add("display", JsonObject().apply {
+            addProperty("brightness", runCatching { Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) }.getOrDefault(-1))
+            addProperty("brightness_mode", runCatching { Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE) }.getOrDefault(-1))
+        })
+        add("audio", audioState(audio))
         addProperty("network", activeNetworkType())
         add("control_lease", leaseStatus())
     }
@@ -168,6 +207,17 @@ class PhoneToolExecutor(
             addProperty("manage_external_storage", Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager())
             addProperty("write_settings", Settings.System.canWrite(context))
         })
+    }
+
+    private fun listJsApis(args: JsonObject): JsonObject {
+        val matches = PhoneJsApiCatalog.query(args.stringOrNull("category"), args.stringOrNull("query"))
+        val offset = args.cursor().coerceAtMost(matches.size)
+        val limit = args.int("limit", 50).coerceIn(1, 100)
+        val items = JsonArray().apply { matches.drop(offset).take(limit).forEach(::add) }
+        return page(items, offset, limit, matches.size).apply {
+            add("categories", PhoneJsApiCatalog.categoriesJson())
+            addProperty("generic_tool", "phone_call_js_api")
+        }
     }
 
     private fun sessionControl(args: JsonObject, peer: JsonObject): JsonObject {
@@ -453,10 +503,184 @@ class PhoneToolExecutor(
             "quick_settings" -> automator.quickSettings()
             "power_dialog" -> automator.powerDialog()
             "lock_screen" -> automator.lockScreen()
+            "split_screen" -> automator.splitScreen()
+            "take_screenshot" -> automator.takeScreenshot()
+            "headset_hook" -> automator.headsethook()
+            "accessibility_button" -> automator.accessibilityButton()
+            "accessibility_button_chooser" -> automator.accessibilityButtonChooser()
+            "accessibility_shortcut" -> automator.accessibilityShortcut()
+            "accessibility_all_apps" -> automator.accessibilityAllApps()
+            "dismiss_notification_shade" -> automator.dismissNotificationShade()
             else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported global action: $action", false)
         }
         if (!success) throw PhoneToolException("ACTION_FAILED", "Global action '$action' was rejected")
         return JsonObject().apply { addProperty("performed", true); addProperty("action", action) }
+    }
+
+    private fun vibrate(args: JsonObject): JsonObject {
+        val vibrator = vibrator()
+            ?: throw PhoneToolException("CAPABILITY_UNAVAILABLE", "No Android vibrator service is available")
+        if (!vibrator.hasVibrator()) throw PhoneToolException("CAPABILITY_UNAVAILABLE", "This device has no vibrator")
+        val action = args.string("action")
+        when (action) {
+            "once" -> {
+                val duration = args.long("duration_ms", 200).coerceIn(1, 60_000)
+                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+            "pattern" -> {
+                val timings = args.getAsJsonArray("timings_ms")
+                    ?: throw PhoneToolException("INVALID_ARGUMENT", "timings_ms is required for a vibration pattern", false)
+                if (timings.size() !in 1..100) {
+                    throw PhoneToolException("INVALID_ARGUMENT", "A vibration pattern must contain 1 to 100 timings", false)
+                }
+                val values = timings.map { it.asLong.coerceIn(0, 60_000) }.toLongArray()
+                val repeat = args.int("repeat_index", -1)
+                if (repeat !in -1 until values.size) {
+                    throw PhoneToolException("INVALID_ARGUMENT", "repeat_index must be -1 or reference a pattern element", false)
+                }
+                vibrator.vibrate(VibrationEffect.createWaveform(values, repeat))
+            }
+            "cancel" -> vibrator.cancel()
+            else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported vibration action: $action", false)
+        }
+        return JsonObject().apply {
+            addProperty("performed", true)
+            addProperty("action", action)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun deviceControl(args: JsonObject): JsonObject {
+        val action = args.string("action")
+        when (action) {
+            "wake_screen", "keep_screen_on", "keep_screen_dim" -> {
+                runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+                val power = context.getSystemService(PowerManager::class.java)
+                    ?: throw PhoneToolException("CAPABILITY_UNAVAILABLE", "No Android power service is available")
+                val level = if (action == "keep_screen_dim") PowerManager.SCREEN_DIM_WAKE_LOCK else PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+                val timeout = if (action == "wake_screen") 500L else args.long("timeout_ms", 300_000).coerceIn(100, 3_600_000)
+                wakeLock = power.newWakeLock(level or PowerManager.ACQUIRE_CAUSES_WAKEUP, "AutoJs6:PhoneMcp").apply { acquire(timeout) }
+            }
+            "cancel_keep_awake" -> {
+                runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+                wakeLock = null
+            }
+            "set_brightness" -> {
+                requireWriteSettings()
+                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, args.int("brightness").coerceIn(0, 255))
+            }
+            "set_brightness_mode" -> {
+                requireWriteSettings()
+                val mode = when (args.string("brightness_mode")) {
+                    "manual" -> Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                    "automatic" -> Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+                    else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported brightness mode", false)
+                }
+                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, mode)
+            }
+            else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported device action: $action", false)
+        }
+        return JsonObject().apply {
+            addProperty("performed", true)
+            addProperty("action", action)
+            addProperty("wake_lock_held", wakeLock?.isHeld == true)
+        }
+    }
+
+    private fun audioControl(args: JsonObject): JsonObject {
+        val audio = context.getSystemService(AudioManager::class.java)
+            ?: throw PhoneToolException("CAPABILITY_UNAVAILABLE", "No Android audio service is available")
+        val stream = audioStream(args.string("stream"))
+        val flags = if (args.boolean("show_ui", false)) AudioManager.FLAG_SHOW_UI else 0
+        when (val action = args.string("action")) {
+            "set" -> {
+                if (!args.has("level")) throw PhoneToolException("INVALID_ARGUMENT", "level is required for set", false)
+                audio.setStreamVolume(stream, args.int("level").coerceIn(0, audio.getStreamMaxVolume(stream)), flags)
+            }
+            "adjust_up" -> audio.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, flags)
+            "adjust_down" -> audio.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, flags)
+            "mute" -> audio.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags)
+            "unmute" -> audio.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags)
+            else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported audio action: $action", false)
+        }
+        return JsonObject().apply {
+            addProperty("performed", true)
+            addProperty("stream", args.string("stream"))
+            addProperty("level", audio.getStreamVolume(stream))
+            addProperty("max_level", audio.getStreamMaxVolume(stream))
+            addProperty("muted", audio.isStreamMute(stream))
+        }
+    }
+
+    private fun toast(args: JsonObject): JsonObject {
+        val action = args.string("action")
+        if (action !in setOf("show", "dismiss")) {
+            throw PhoneToolException("INVALID_ARGUMENT", "Unsupported toast action: $action", false)
+        }
+        if (action == "show" && !args.has("text")) {
+            throw PhoneToolException("INVALID_ARGUMENT", "text is required for show", false)
+        }
+        val latch = CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            when (action) {
+                "show" -> {
+                    activeToast?.cancel()
+                    activeToast = Toast.makeText(
+                        context,
+                        args.string("text"),
+                        if (args.stringOrNull("duration") == "long") Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                    ).also(Toast::show)
+                }
+                "dismiss" -> {
+                    activeToast?.cancel()
+                    activeToast = null
+                }
+            }
+            latch.countDown()
+        }
+        if (!latch.await(2, TimeUnit.SECONDS)) throw PhoneToolException("TIMEOUT", "Toast operation timed out")
+        return JsonObject().apply { addProperty("performed", true); addProperty("action", action) }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun vibrator(): Vibrator? = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        else -> context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    }
+
+    private fun requireWriteSettings() {
+        if (!Settings.System.canWrite(context)) {
+            throw PhoneToolException("PERMISSION_DENIED", "Android modify-system-settings access is required", false)
+        }
+    }
+
+    private fun audioState(audio: AudioManager?) = JsonObject().apply {
+        listOf("music", "notification", "alarm", "ring", "system", "voice_call").forEach { name ->
+            val stream = audioStream(name)
+            add(name, JsonObject().apply {
+                addProperty("level", audio?.getStreamVolume(stream) ?: -1)
+                addProperty("max_level", audio?.getStreamMaxVolume(stream) ?: -1)
+                addProperty("muted", audio?.isStreamMute(stream) == true)
+            })
+        }
+    }
+
+    private fun audioStream(name: String) = when (name) {
+        "music" -> AudioManager.STREAM_MUSIC
+        "notification" -> AudioManager.STREAM_NOTIFICATION
+        "alarm" -> AudioManager.STREAM_ALARM
+        "ring" -> AudioManager.STREAM_RING
+        "system" -> AudioManager.STREAM_SYSTEM
+        "voice_call" -> AudioManager.STREAM_VOICE_CALL
+        else -> throw PhoneToolException("INVALID_ARGUMENT", "Unsupported audio stream: $name", false)
+    }
+
+    private fun batterySource(plugged: Int) = when (plugged) {
+        BatteryManager.BATTERY_PLUGGED_AC -> "ac"
+        BatteryManager.BATTERY_PLUGGED_USB -> "usb"
+        BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
+        BatteryManager.BATTERY_PLUGGED_DOCK -> "dock"
+        else -> "none"
     }
 
     private fun inputText(args: JsonObject): JsonObject {

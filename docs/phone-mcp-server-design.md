@@ -781,7 +781,89 @@ Agent 能连接手机、获取独占租约、识别页面、打开任意普通�
 交互、等待结果、使用 OCR 兜底、操作通知和限定文件，并能在网络或工具失败后获得明确
 的恢复建议。
 
-## 10. 后续阶段
+## 10. 语义流程自动化与固化
+
+Phone MCP 保持模型无关的原子执行层，可在 Agent 侧选配 Midscene 作为语义规划、视觉
+定位和流程编排层。生产链路不直接使用依赖 ADB、USB 调试和调试安全设置的
+`@midscene/android` 驱动，而是实现一个通过 Headscale 调用 Phone MCP 的
+`AbstractInterface` 适配器：
+
+```text
+Midscene YAML / TypeScript
+        |
+        v
+Midscene Agent + Phone MCP AbstractInterface
+        |
+        v
+Phone MCP / Headscale / control lease
+        |
+        v
+AutoJs6 Android
+```
+
+适配器的 `screenshotBase64()` 和 `size()` 使用 `phone_capture_context` 返回的 MCP
+image 与物理屏幕尺寸；动作空间映射到 `phone_ui_action`、`phone_gesture`、
+`phone_input_text`、`phone_global_action`、`phone_app_control` 和 `phone_open_uri`。
+适配器不能暴露绕过 Phone MCP 策略的 ADB Shell、`pm clear`、强制停止或直接输入注入。
+
+### 10.1 JavaScript 混合编排
+
+复杂流程优先用 JavaScript/TypeScript 显式表达循环、条件、业务数据、超时和错误恢复，
+只在未知页面理解和语义定位处调用 `aiAct`、`aiQuery` 或 `aiAssert`。已知动作应直接调用
+Phone MCP 或 Midscene 即时操作 API，避免把整段确定性业务逻辑反复交给模型规划。
+
+Midscene 的 `aiAct` 会规划并立即执行，不把生成结果作为稳定 JavaScript API 返回。
+其 planning cache 可以复用计划，但 Android 不具备 Web XPath 定位缓存，缓存命中也不能
+保证完全停止 VLM 调用。因此，Phone MCP 集成不能把 Midscene cache 当作生产流程代码，
+而应提供独立的流程记录和固化机制。
+
+### 10.2 探索、回放与自适应模式
+
+语义自动化支持三种明确模式：
+
+- `explore`：使用 `aiAct` 和 VLM 探索未知流程，并记录每个真实动作前后的上下文。
+- `replay`：只运行审核通过的确定性 TypeScript/JSON DSL，不允许调用 VLM。
+- `adaptive`：优先确定性回放；前置条件或选择器失效时才调用 VLM 恢复，并输出新的候选
+  流程版本，不能静默覆盖已审核流程。
+
+生产环境默认使用 `replay`；流程维护可使用 `adaptive`；新流程录制使用 `explore`。
+缓存只作为探索和自适应模式的性能优化，不改变这三个模式的安全语义。
+
+### 10.3 从语义动作生成确定性步骤
+
+Phone MCP 的 Midscene 适配器通过 `beforeInvokeAction` 和 `afterInvokeAction` 钩子记录
+动作、参数、执行前后的 `phone_capture_context` 和验证结果。记录器根据 Midscene 的
+定位坐标，在节点树中选择包含该点的最小可操作节点，并按以下优先级生成稳定选择器：
+
+1. `resource_id`。
+2. `content_description`。
+3. `text` 与 `class_name` 组合。
+4. 父节点语义与子节点关系。
+5. OCR 文字和限定区域。
+6. 归一化坐标，仅作为最后的显式兜底。
+
+`snapshot_id` 和 `node_id` 只在临时快照中有效，禁止写入持久流程。固化步骤保存稳定
+选择器，并在每次回放时重新调用 `phone_ui_snapshot` / `phone_ui_find` 获取当前节点 ID。
+每个页面跳转或有副作用的动作应包含前置条件和结果验证，例如前台包名、节点存在性、
+屏幕方向、关键文字或页面指纹。验证失败立即停止当前确定性流程，不得继续在未知页面
+执行坐标动作。
+
+推荐的流程产物包含：格式版本、目标应用与版本范围、生成时间、来源 prompt、动作步骤、
+前置条件、后置条件、风险等级、所需权限和内容哈希。自动生成的 TypeScript/JSON DSL
+必须经过测试或人工确认后才能进入 `replay` 模式。
+
+### 10.4 租约、安全与隐私
+
+语义流程开始时获取控制租约，长流程按期续租，结束或失败时释放。Midscene 的一次
+`aiAct` 可能包含多个真实动作，但不能因此获得整段流程的无限授权；Phone MCP 仍对每个
+底层动作执行权限、风险确认和审计。付款、授权、删除、发送消息、安装和敏感输入不能由
+录制器自动降级为无确认回放。
+
+VLM 模式会把截图发送给用户配置的模型提供商。适配器应支持敏感页面禁止上传、截图
+区域遮罩、模型提供商 allowlist 和本地模型策略；`replay` 模式不得因为生成报告而隐式
+上传截图。
+
+## 11. 后续阶段
 
 ### 第二阶段
 
@@ -792,6 +874,7 @@ Agent 能连接手机、获取独占租约、识别页面、打开任意普通�
 - 系统设置、网络控制和屏幕比较。
 - 受限 `phone_run_script`。
 - stdio 到远端 Streamable HTTP 的桌面桥接器。
+- 基于 Phone MCP `AbstractInterface` 的 Midscene 适配器和流程记录器。
 
 ### 第三阶段
 
@@ -799,8 +882,9 @@ Agent 能连接手机、获取独占租约、识别页面、打开任意普通�
 - 受控 `phone_shell_exec`。
 - 联系人、短信、电话、日历和位置可选模块。
 - 面向典型任务的高层工作流工具，但继续保留底层原子工具。
+- 经过审核的语义流程 TypeScript/JSON DSL 编译、版本管理和自适应修复。
 
-## 11. 测试与验收
+## 12. 测试与验收
 
 至少覆盖：
 
@@ -818,12 +902,15 @@ Agent 能连接手机、获取独占租约、识别页面、打开任意普通�
 - 安装、删除、Shell、敏感输入和用户拒绝确认。
 - 路径穿越、命令注入、超大请求、重放、暴力配对和越权调用。
 - MCP Inspector 的 schema、structuredContent、annotations 和错误结果验证。
+- Midscene `explore` 生成稳定选择器、`replay` 全程零 VLM 调用和 `adaptive` 失败回退。
+- 页面文案、布局、应用版本和屏幕方向变化时，流程前置条件应阻止错误点击。
+- 语义流程的租约续期、逐动作确认、审计、敏感截图遮罩和失败释放。
 
 建立一组跨应用端到端任务作为回归用例，例如：打开设置并读取系统版本、在浏览器中
 搜索、通过通知回复、填写表单、使用 OCR 点击自绘按钮、上传文件并通过分享面板选择
 目标应用。每个任务应验证最终状态，而不是只验证工具调用成功。
 
-## 12. 参考资料
+## 13. 参考资料
 
 - [Tailscale tsnet](https://tailscale.com/docs/features/tsnet)
 - [tsnet.Server API](https://tailscale.com/docs/reference/tsnet-server-api)
@@ -831,3 +918,8 @@ Agent 能连接手机、获取独占租约、识别页面、打开任意普通�
 - [Tailscale 自定义控制服务器](https://tailscale.com/docs/how-to/set-up-custom-control-server)
 - [Headscale Android Client 接入](https://headscale.net/stable/usage/connect/android/)
 - [MCP Streamable HTTP Transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+- [Midscene Android](https://midscenejs.com/zh/platforms/android)
+- [Midscene 自定义界面集成](https://midscenejs.com/zh/integrate-with-any-interface)
+- [Midscene JavaScript 与 YAML 工作流](https://midscenejs.com/zh/automate-with-scripts-in-yaml)
+- [Midscene AI 规划和定位缓存](https://midscenejs.com/zh/caching)
+- [Midscene 数据隐私](https://midscenejs.com/zh/data-privacy)

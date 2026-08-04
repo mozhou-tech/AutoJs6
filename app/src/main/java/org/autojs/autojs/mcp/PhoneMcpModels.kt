@@ -51,7 +51,7 @@ object PhoneToolSpecs {
         read("phone_get_permissions", "Get Android runtime and special permission status."),
         read(
             "phone_list_js_apis",
-            "List verified JSON-callable AutoJs6 atomic JavaScript APIs and their preferred native MCP tools.",
+            "List verified JSON-callable PhoneMCP atomic JavaScript APIs and their preferred native MCP tools.",
             paginationSchema(
                 "category" to enum(*PhoneJsApiCatalog.categories.toTypedArray()),
                 "query" to string("Case-insensitive API path filter"),
@@ -229,7 +229,7 @@ object PhoneToolSpecs {
         ),
         PhoneToolSpec(
             "phone_call_js_api",
-            "Call any AutoJs6 atomic JavaScript API by dotted path with JSON arguments. Examples: getClip, setClip, home, press, device.vibrate.",
+            "Call any PhoneMCP atomic JavaScript API by dotted path with JSON arguments. Examples: getClip, setClip, home, press, device.vibrate.",
             schema(
                 lease,
                 "api" to string("Global function or dotted namespace method"),

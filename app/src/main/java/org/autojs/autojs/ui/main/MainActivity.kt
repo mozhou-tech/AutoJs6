@@ -47,7 +47,7 @@ import org.autojs.autojs.theme.widget.ThemeColorToolbar
 import org.autojs.autojs.ui.BaseActivity
 import org.autojs.autojs.ui.explorer.ExplorerView
 import org.autojs.autojs.ui.floating.FloatyWindowManger
-import org.autojs.autojs.ui.log.LogActivity
+import org.autojs.autojs.ui.log.LogFragment
 import org.autojs.autojs.ui.main.drawer.DrawerFragment.Companion.Event.OnDrawerClosed
 import org.autojs.autojs.ui.main.drawer.DrawerFragment.Companion.Event.OnDrawerOpened
 import org.autojs.autojs.ui.main.plugin.PluginFragment
@@ -119,7 +119,6 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
     private lateinit var mTab: TabLayout
     private lateinit var mToolbar: ThemeColorToolbar
     private lateinit var mPagerAdapter: StoredFragmentPagerAdapter
-    private lateinit var mLogMenuItem: MenuItem
     private lateinit var mSearchMenuItem: MenuItem
     private lateinit var mActionBarDrawerToggle: ActionBarDrawerToggle
 
@@ -199,8 +198,12 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
 
     private fun setUpBottomTabInsets(binding: ActivityMainBinding) {
         val tab = binding.tab
+        val tabHeight = resources.getDimensionPixelSize(R.dimen.main_bottom_tab_height)
         ViewCompat.setOnApplyWindowInsetsListener(binding.mainContent) { _, insets ->
             val navigationBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            tab.layoutParams = tab.layoutParams.apply {
+                height = tabHeight + navigationBars.bottom
+            }
             tab.setPadding(tab.paddingLeft, tab.paddingTop, tab.paddingRight, navigationBars.bottom)
             WindowInsetsCompat.Builder(insets)
                 .setInsets(
@@ -295,6 +298,7 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
             .add(PhoneMcpFragment(), R.string.text_mcp)
             .add(PluginFragment(), R.string.text_plugins)
             .add(TaskManagerFragment(), R.string.text_task)
+            .add(LogFragment(), R.string.text_log)
             .build()
             .apply {
                 setOnFragmentInstantiateListener { pos: Int, fragment: Fragment ->
@@ -402,17 +406,12 @@ class MainActivity : BaseActivity(), DelegateHost, HostActivity {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
-        mLogMenuItem = menu.findItem(R.id.action_log)
         setUpSearchMenuItem(menu)
         setUpToolbarColors()
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.itemId == R.id.action_log) {
-            LogActivity.launch(this)
-            return true
-        }
         if (item.itemId == R.id.action_search_next) {
             submitForwardQuery()
             return true

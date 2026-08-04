@@ -368,7 +368,7 @@ object IntentUtils {
         @JvmOverloads
         fun restart(context: Context, beforeExit: (() -> Unit)? = null, scriptsAfterRestart: List<String>? = null) {
             val launchIntent = getLaunchIntent(context)
-                ?: throw RuntimeException("Failed to create launch intent for AutoJs6")
+                ?: throw RuntimeException("Failed to create launch intent for PhoneMCP")
 
             if (context is AppCompatActivity && Pref.isQuickRestartEnabled) {
                 // When clicking the "Restart" button in the main drawer,

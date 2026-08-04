@@ -1129,7 +1129,7 @@ class PhoneToolExecutor(
         ?: "unknown"
 
     private fun requireAccessibility(): AccessibilityService = AccessibilityService.instance
-        ?: throw PhoneToolException("ACCESSIBILITY_DISABLED", "Enable the AutoJs6 accessibility service before using this tool")
+        ?: throw PhoneToolException("ACCESSIBILITY_DISABLED", "Enable the PhoneMCP accessibility service before using this tool")
 
     private fun activeNetworkType(): String {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return "none"

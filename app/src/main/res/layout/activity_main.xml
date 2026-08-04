@@ -53,8 +53,7 @@
             <com.google.android.material.tabs.TabLayout
                 android:id="@+id/tab"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:minHeight="?attr/actionBarSize"
+                android:layout_height="@dimen/main_bottom_tab_height"
                 app:tabGravity="fill"
                 app:tabMaxWidth="0dp"
                 app:tabMode="fixed"

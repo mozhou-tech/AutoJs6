@@ -477,7 +477,7 @@ object Util : Augmentable() {
     @JvmStatic
     @RhinoFunctionBody
     fun deprecateRhino() {
-        AutoJs.instance.globalConsole.warn("This method is not designed for AutoJs6.")
+        AutoJs.instance.globalConsole.warn("This method is not designed for PhoneMCP.")
     }
 
     @JvmStatic
@@ -514,7 +514,7 @@ object Util : Augmentable() {
     @JvmStatic
     @RhinoFunctionBody
     fun debuglogRhino() {
-        AutoJs.instance.globalConsole.warn("This method is not designed for AutoJs6.")
+        AutoJs.instance.globalConsole.warn("This method is not designed for PhoneMCP.")
     }
 
     @JvmStatic

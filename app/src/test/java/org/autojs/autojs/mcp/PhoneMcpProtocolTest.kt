@@ -24,13 +24,19 @@ class PhoneMcpProtocolTest {
     fun toolsListHasStableSchemasAndAnnotations() {
         val tools = protocol().request("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")
             .result().getAsJsonArray("tools")
-        assertEquals(29, tools.size())
+        assertEquals(30, tools.size())
         tools.forEach { element ->
             val tool = element.asJsonObject
             assertTrue(tool.get("name").asString.startsWith("phone_"))
             assertEquals("object", tool.getAsJsonObject("inputSchema").get("type").asString)
             assertTrue(tool.has("annotations"))
         }
+        val captureContext = tools.map { it.asJsonObject }.single { it.get("name").asString == "phone_capture_context" }
+        val properties = captureContext.getAsJsonObject("inputSchema").getAsJsonObject("properties")
+        assertTrue(properties.has("max_width"))
+        assertTrue(properties.has("max_nodes"))
+        assertTrue(properties.has("min_confidence"))
+        assertTrue(captureContext.getAsJsonObject("annotations").get("readOnlyHint").asBoolean)
     }
 
     @Test

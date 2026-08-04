@@ -71,6 +71,18 @@ object PhoneToolSpecs {
             ),
         ),
         read(
+            "phone_capture_context",
+            "Capture one VLM-ready context containing an MCP image, screen metadata, accessibility nodes and OCR results.",
+            schema(
+                "format" to enum("png", "jpeg", "webp"),
+                "quality" to integer("Image quality for lossy formats", 1, 100),
+                "max_width" to integer("Optional maximum image width; coordinates remain in physical screen space", 64, 4096),
+                "max_nodes" to integer("Maximum accessibility nodes returned", 1, 2000),
+                "visible_only" to bool("Only include nodes visible to the user"),
+                "min_confidence" to number("Minimum OCR recognition confidence", 0.0, 1.0),
+            ),
+        ),
+        read(
             "phone_ui_snapshot",
             "Capture the active accessibility node tree and return a snapshot_id with stable temporary node IDs.",
             schema(

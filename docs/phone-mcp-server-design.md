@@ -20,7 +20,7 @@ Headscale 网络中的独立节点，但不接管整台手机的网络流量。�
 
 ### 1.1 当前实现状态（2026-08-03）
 
-第一版已经落地：Android 端提供 MCP JSON-RPC、29 个 `phone_` 工具、独占控制租约、
+第一版已经落地：Android 端提供 MCP JSON-RPC、30 个 `phone_` 工具、独占控制租约、
 前台服务、开机恢复和应用内设置入口；Go 桥接层基于 `tailscale.com v1.102.0` 与
 `gomobile` 生成 `phone-tailnet.aar`，覆盖 arm64-v8a 和 armeabi-v7a；为控制内置产物体积，
 不包含 x86 和 x86_64 模拟器 ABI。
@@ -265,7 +265,7 @@ Agent 按以下顺序理解页面：
 }
 ```
 
-`phone_capture_screen` 还应直接返回 MCP `image` 内容。大文件和长日志返回资源 URI、
+`phone_capture_screen` 和 `phone_capture_context` 还应直接返回 MCP `image` 内容。大文件和长日志返回资源 URI、
 游标或下载句柄，避免把大段 Base64 或无界文本放入模型上下文。
 
 ### 4.2 错误结果
@@ -347,6 +347,7 @@ Agent 按以下顺序理解页面：
     "accessibility": true,
     "screen_capture": true,
     "ocr": true,
+    "visual_context": true,
     "notification_access": false,
     "root": false,
     "shizuku": false,
@@ -396,6 +397,21 @@ MCP annotations：`readOnlyHint=true`、`destructiveHint=false`、
 - `include_metadata`: 是否返回前台应用、方向和时间戳。
 
 输出必须包含原始屏幕尺寸、返回图像尺寸、裁剪区域、旋转方向和截图时间。
+
+#### `phone_capture_context`
+
+为远端 VLM/Agent 一次返回同一采集窗口内的屏幕图像、物理屏幕元数据、无障碍节点树
+和 PP-OCRv6 结果。截图和 OCR 必须共享同一张原始位图，避免连续截屏期间页面变化造成
+图像与文字错位；节点树返回可复用的 `snapshot_id`，供后续 `phone_ui_action` 精确操作。
+
+支持 `format`、`quality`、`max_width`、`max_nodes`、`visible_only` 和
+`min_confidence`。图像可以按 `max_width` 下采样以节省上下文，但节点边界和 OCR 边界
+始终采用原始物理屏幕坐标。返回的 `screen.coordinate_space` 明确标记为
+`physical_screen`，并同时提供原始尺寸和返回图像尺寸，便于 VLM 做坐标映射。
+
+该工具仅负责可靠采集，不在手机端绑定特定 VLM，也不直接执行任何动作。Agent 应优先
+使用无障碍节点语义，其次使用 OCR，最后才通过视觉推理选择坐标；付款、授权、删除、
+发送消息和安装等高风险操作仍必须经过现有租约、权限和用户确认策略。
 
 #### `phone_ui_snapshot`
 
@@ -732,29 +748,30 @@ action。一次性验证码和敏感通知内容默认脱敏，并可通过本�
 4. `phone_get_permissions`
 5. `phone_session_control`
 6. `phone_capture_screen`
-7. `phone_ui_snapshot`
-8. `phone_ui_find`
-9. `phone_ocr_read`
-10. `phone_wait_for`
-11. `phone_ui_action`
-12. `phone_gesture`
-13. `phone_global_action`
-14. `phone_input_text`
-15. `phone_action_sequence`
-16. `phone_list_apps`
-17. `phone_get_app_info`
-18. `phone_app_control`
-19. `phone_open_uri`
-20. `phone_get_notifications`
-21. `phone_notification_action`
-22. `phone_get_clipboard`
-23. `phone_set_clipboard`
-24. `phone_list_files`
-25. `phone_read_file`
-26. `phone_write_file`
-27. `phone_manage_file`
-28. `phone_get_jobs`
-29. `phone_cancel_job`
+7. `phone_capture_context`
+8. `phone_ui_snapshot`
+9. `phone_ui_find`
+10. `phone_ocr_read`
+11. `phone_wait_for`
+12. `phone_ui_action`
+13. `phone_gesture`
+14. `phone_global_action`
+15. `phone_input_text`
+16. `phone_action_sequence`
+17. `phone_list_apps`
+18. `phone_get_app_info`
+19. `phone_app_control`
+20. `phone_open_uri`
+21. `phone_get_notifications`
+22. `phone_notification_action`
+23. `phone_get_clipboard`
+24. `phone_set_clipboard`
+25. `phone_list_files`
+26. `phone_read_file`
+27. `phone_write_file`
+28. `phone_manage_file`
+29. `phone_get_jobs`
+30. `phone_cancel_job`
 
 第一版还包含内嵌 tsnet AAR、Headscale Server 本地配置、一次性 pre-auth key 注册、
 节点状态私有存储、Tailnet/回环 HTTP listener、应用层配对令牌及传输诊断界面。

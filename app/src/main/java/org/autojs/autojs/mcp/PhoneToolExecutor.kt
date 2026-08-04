@@ -69,6 +69,7 @@ class PhoneToolExecutor(
         "phone_get_permissions" -> execution(getPermissions())
         "phone_session_control" -> execution(sessionControl(args, peer))
         "phone_capture_screen" -> captureScreen(args)
+        "phone_capture_context" -> captureContext(args)
         "phone_ui_snapshot" -> execution(captureUiSnapshot(args).json)
         "phone_ui_find" -> execution(findUi(args))
         "phone_ocr_read" -> execution(ocrRead(args))
@@ -118,6 +119,7 @@ class PhoneToolExecutor(
             addProperty("accessibility", service != null)
             addProperty("screen_capture", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("ocr", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            addProperty("visual_context", service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             addProperty("notification_access", NotificationListenerService.isNotificationListenerEnabled(context))
             addProperty("root", false)
             addProperty("shizuku", false)
@@ -189,41 +191,81 @@ class PhoneToolExecutor(
     }
 
     private fun captureScreen(args: JsonObject): PhoneToolExecution {
-        var bitmap = captureBitmap()
-        val maxWidth = args.intOrNull("max_width")
-        if (maxWidth != null && bitmap.width > maxWidth) {
-            val height = (bitmap.height * (maxWidth.toDouble() / bitmap.width)).roundToInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(bitmap, maxWidth, height, true)
+        val bitmap = captureBitmap()
+        return try {
+            val capturedAt = System.currentTimeMillis()
+            val encoded = encodeScreen(bitmap, args, capturedAt)
+            PhoneToolExecution(encoded.metadata, JsonArray().apply { add(encoded.content) })
+        } finally {
             bitmap.recycle()
-            bitmap = scaled
         }
-        val requestedFormat = args.stringOrNull("format") ?: "png"
-        val quality = args.int("quality", 90).coerceIn(1, 100)
-        val (format, mime) = when (requestedFormat) {
-            "jpeg" -> Bitmap.CompressFormat.JPEG to "image/jpeg"
-            "webp" -> webpFormat() to "image/webp"
-            else -> Bitmap.CompressFormat.PNG to "image/png"
+    }
+
+    private fun captureContext(args: JsonObject): PhoneToolExecution {
+        val bitmap = captureBitmap()
+        return try {
+            val capturedAt = System.currentTimeMillis()
+            val snapshot = captureUiSnapshot(args)
+            val ocr = ocrBitmap(bitmap, args)
+            val encoded = encodeScreen(bitmap, args, capturedAt)
+            val metrics = context.resources.displayMetrics
+            val data = JsonObject().apply {
+                addProperty("captured_at", capturedAt)
+                add("screen", JsonObject().apply {
+                    addProperty("width", bitmap.width)
+                    addProperty("height", bitmap.height)
+                    addProperty("density", metrics.density)
+                    addProperty("rotation", context.getSystemService(WindowManager::class.java)?.defaultDisplay?.rotation ?: 0)
+                    addProperty("image_width", encoded.metadata.get("width").asInt)
+                    addProperty("image_height", encoded.metadata.get("height").asInt)
+                    addProperty("mime_type", encoded.metadata.get("mime_type").asString)
+                    addProperty("size_bytes", encoded.metadata.get("size_bytes").asInt)
+                    addProperty("coordinate_space", "physical_screen")
+                })
+                add("ui_snapshot", snapshot.json)
+                add("ocr", ocr)
+            }
+            PhoneToolExecution(data, JsonArray().apply { add(encoded.content) })
+        } finally {
+            bitmap.recycle()
         }
-        val bytes = ByteArrayOutputStream().use { output ->
-            check(bitmap.compress(format, quality, output)) { "Bitmap compression failed" }
-            output.toByteArray()
+    }
+
+    private fun encodeScreen(bitmap: Bitmap, args: JsonObject, capturedAt: Long): EncodedScreen {
+        var outputBitmap = bitmap
+        val maxWidth = args.intOrNull("max_width")
+        if (maxWidth != null && outputBitmap.width > maxWidth) {
+            val height = (bitmap.height * (maxWidth.toDouble() / bitmap.width)).roundToInt().coerceAtLeast(1)
+            outputBitmap = Bitmap.createScaledBitmap(bitmap, maxWidth, height, true)
         }
-        val data = JsonObject().apply {
-            addProperty("width", bitmap.width)
-            addProperty("height", bitmap.height)
-            addProperty("mime_type", mime)
-            addProperty("size_bytes", bytes.size)
-            addProperty("captured_at", System.currentTimeMillis())
-        }
-        bitmap.recycle()
-        val content = JsonArray().apply {
-            add(JsonObject().apply {
+        return try {
+            val requestedFormat = args.stringOrNull("format") ?: "png"
+            val quality = args.int("quality", 90).coerceIn(1, 100)
+            val (format, mime) = when (requestedFormat) {
+                "jpeg" -> Bitmap.CompressFormat.JPEG to "image/jpeg"
+                "webp" -> webpFormat() to "image/webp"
+                else -> Bitmap.CompressFormat.PNG to "image/png"
+            }
+            val bytes = ByteArrayOutputStream().use { output ->
+                check(outputBitmap.compress(format, quality, output)) { "Bitmap compression failed" }
+                output.toByteArray()
+            }
+            val metadata = JsonObject().apply {
+                addProperty("width", outputBitmap.width)
+                addProperty("height", outputBitmap.height)
+                addProperty("mime_type", mime)
+                addProperty("size_bytes", bytes.size)
+                addProperty("captured_at", capturedAt)
+            }
+            val content = JsonObject().apply {
                 addProperty("type", "image")
                 addProperty("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
                 addProperty("mimeType", mime)
-            })
+            }
+            EncodedScreen(metadata, content)
+        } finally {
+            if (outputBitmap !== bitmap) outputBitmap.recycle()
         }
-        return PhoneToolExecution(data, content)
     }
 
     private fun captureUiSnapshot(args: JsonObject = JsonObject()): UiSnapshot {
@@ -277,25 +319,29 @@ class PhoneToolExecutor(
     private fun ocrRead(args: JsonObject): JsonObject {
         val bitmap = captureBitmap()
         return try {
-            val minConfidence = args.double("min_confidence", 0.0).coerceIn(0.0, 1.0).toFloat()
-            val textFilter = args.stringOrNull("text")
-            val options = OcrOptions().apply { scoreThreshold = minConfidence }
-            val results = PaddleOcrEmbeddedEngine.detect(context, bitmap, options)
-                .filter { textFilter == null || it.text.contains(textFilter, ignoreCase = true) }
-            JsonObject().apply {
-                addProperty("count", results.size)
-                add("items", JsonArray().apply {
-                    results.forEach { result ->
-                        add(JsonObject().apply {
-                            addProperty("text", result.text)
-                            addProperty("confidence", result.confidence)
-                            add("bounds", rectJson(result.bounds))
-                        })
-                    }
-                })
-            }
+            ocrBitmap(bitmap, args)
         } finally {
             bitmap.recycle()
+        }
+    }
+
+    private fun ocrBitmap(bitmap: Bitmap, args: JsonObject): JsonObject {
+        val minConfidence = args.double("min_confidence", 0.0).coerceIn(0.0, 1.0).toFloat()
+        val textFilter = args.stringOrNull("text")
+        val options = OcrOptions().apply { scoreThreshold = minConfidence }
+        val results = PaddleOcrEmbeddedEngine.detect(context, bitmap, options)
+            .filter { textFilter == null || it.text.contains(textFilter, ignoreCase = true) }
+        return JsonObject().apply {
+            addProperty("count", results.size)
+            add("items", JsonArray().apply {
+                results.forEach { result ->
+                    add(JsonObject().apply {
+                        addProperty("text", result.text)
+                        addProperty("confidence", result.confidence)
+                        add("bounds", rectJson(result.bounds))
+                    })
+                }
+            })
         }
     }
 
@@ -855,6 +901,8 @@ class PhoneToolExecutor(
     private fun execution(data: JsonObject) = PhoneToolExecution(data)
 
     private data class ControlLease(val id: String, val owner: String, val expiresAt: Long)
+
+    private data class EncodedScreen(val metadata: JsonObject, val content: JsonObject)
 
     private data class UiSnapshot(
         val id: String,

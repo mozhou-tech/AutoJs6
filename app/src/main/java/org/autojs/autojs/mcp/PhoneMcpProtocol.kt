@@ -88,7 +88,7 @@ class PhoneMcpProtocol(private val executor: PhoneToolDispatcher) : Handler {
             })
             addProperty(
                 "instructions",
-                "Call phone_get_capabilities and phone_get_state first. Acquire a lease with phone_session_control before every write workflow. Prefer phone_ui_snapshot and phone_ui_action over coordinates; use phone_ocr_read and phone_gesture only as fallbacks.",
+                "Call phone_get_capabilities and phone_get_state first. Use phone_capture_context when visual reasoning needs a synchronized image, accessibility tree and OCR. Acquire a lease with phone_session_control before every write workflow. Prefer phone_ui_snapshot and phone_ui_action over coordinates; use phone_ocr_read and phone_gesture only as fallbacks.",
             )
         }
     }

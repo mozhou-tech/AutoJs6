@@ -78,7 +78,7 @@ class PhoneMcpToolListFragment : Fragment(R.layout.fragment_phone_mcp_tool_table
         minHeight = dp(40)
         if (header) setTypeface(typeface, Typeface.BOLD)
         setBackgroundResource(if (header) R.drawable.bg_phone_mcp_table_header else R.drawable.bg_phone_mcp_table_cell)
-        layoutParams = TableRow.LayoutParams(dp(widthDp), TableRow.LayoutParams.WRAP_CONTENT)
+        layoutParams = TableRow.LayoutParams(dp(widthDp), TableRow.LayoutParams.MATCH_PARENT)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
